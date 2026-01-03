@@ -145,6 +145,20 @@ npm run test
 
 See `/docs/TROUBLESHOOTING.adoc` for common issues and solutions.
 
+### Maintaining the Troubleshooting Guide
+
+When you encounter or help resolve an issue that admins or users might face:
+
+1. **Add it to `/docs/TROUBLESHOOTING.adoc`** in the appropriate section
+2. Use the table format with clear Problem/Solution columns:
+   ```asciidoc
+   |**Problem description**
+   |Solution with specific steps or commands.
+   ```
+3. Be specific about error messages and exact solutions
+4. Include relevant commands, URLs, or configuration values
+5. Group related issues under appropriate section headers
+
 ## Contact
 
 - **Project Owner**: KnowAll AI

@@ -1,9 +1,9 @@
 'use client';
 
 import { useSession } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useState, useEffect } from 'react';
 import { MainLayout } from '@/components/layout';
+import LandingPage from '@/components/LandingPage';
 import {
   Ticket,
   Clock,
@@ -27,7 +27,6 @@ interface DashboardStats {
 
 export default function HomePage() {
   const { data: session, status } = useSession();
-  const router = useRouter();
   const [stats, setStats] = useState<DashboardStats>({
     totalTickets: 0,
     openTickets: 0,
@@ -37,12 +36,6 @@ export default function HomePage() {
     customerSatisfaction: 0,
   });
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (status === 'unauthenticated') {
-      router.push('/login');
-    }
-  }, [status, router]);
 
   useEffect(() => {
     if (session?.accessToken) {
@@ -72,8 +65,9 @@ export default function HomePage() {
     );
   }
 
+  // Show landing page for unauthenticated users
   if (!session) {
-    return null;
+    return <LandingPage />;
   }
 
   const statCards = [
