@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { format } from 'date-fns';
-import { Filter, ChevronDown, ChevronUp, Play, MoreHorizontal } from 'lucide-react';
+import { Filter, ChevronDown, ChevronUp, Play } from 'lucide-react';
 import type { Ticket } from '@/types';
 import StatusBadge from '../common/StatusBadge';
 import Avatar from '../common/Avatar';
@@ -25,7 +25,7 @@ export default function TicketList({ tickets, title, showGroupBy = true }: Ticke
   const [sortField, setSortField] = useState<SortField>('updated');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [selectedTickets, setSelectedTickets] = useState<Set<number>>(new Set());
-  const [groupBy, setGroupBy] = useState<'assignee' | 'none'>('assignee');
+  const [groupBy] = useState<'assignee' | 'none'>('assignee');
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {

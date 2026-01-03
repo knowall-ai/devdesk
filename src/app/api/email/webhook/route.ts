@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { AzureDevOpsService, getProjectFromEmail, PROJECT_DOMAIN_MAP } from '@/lib/devops';
+import { getProjectFromEmail } from '@/lib/devops';
 import type { EmailWebhookPayload } from '@/types';
 
 // This endpoint receives emails from email providers like SendGrid, Mailgun, etc.
@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
     }
 
     const payload: EmailWebhookPayload = await request.json();
-    const { from, to, subject, body } = payload;
+    const { from, subject, body } = payload;
 
     // Validate required fields
     if (!from || !subject) {

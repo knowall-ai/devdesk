@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { AzureDevOpsService, PROJECT_DOMAIN_MAP } from '@/lib/devops';
+import { AzureDevOpsService } from '@/lib/devops';
 import type { Organization } from '@/types';
 
 // Domain mappings for organizations

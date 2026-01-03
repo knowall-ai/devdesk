@@ -2,7 +2,7 @@
 
 import { useSession } from 'next-auth/react';
 import { useRouter, useParams } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import { MainLayout } from '@/components/layout';
 import { TicketDetail } from '@/components/tickets';
 import type { Ticket, TicketComment } from '@/types';
@@ -23,13 +23,7 @@ export default function TicketDetailPage() {
     }
   }, [status, router]);
 
-  useEffect(() => {
-    if (session?.accessToken && ticketId) {
-      fetchTicket();
-    }
-  }, [session, ticketId]);
-
-  const fetchTicket = async () => {
+  const fetchTicket = useCallback(async () => {
     setLoading(true);
     try {
       const response = await fetch(`/api/devops/tickets/${ticketId}`);
@@ -53,7 +47,13 @@ export default function TicketDetailPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [ticketId, router]);
+
+  useEffect(() => {
+    if (session?.accessToken && ticketId) {
+      fetchTicket();
+    }
+  }, [session, ticketId, fetchTicket]);
 
   const handleAddComment = async (comment: string, isInternal: boolean) => {
     try {

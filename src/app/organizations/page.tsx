@@ -72,17 +72,17 @@ export default function OrganizationsPage() {
         <div className="flex items-start justify-between mb-6">
           <div>
             <h1 className="text-2xl font-bold mb-2" style={{ color: 'var(--text-primary)' }}>
-              Organisations
+              Organizations
             </h1>
             <p style={{ color: 'var(--text-secondary)' }}>
-              Add, search, and manage your organisations all in one place.
+              Add, search, and manage your organizations all in one place.
             </p>
             <a
               href="#"
               className="text-sm flex items-center gap-1 mt-1"
               style={{ color: 'var(--primary)' }}
             >
-              Learn about organisations <ExternalLink size={12} />
+              Learn about organizations <ExternalLink size={12} />
             </a>
           </div>
           <div className="flex items-center gap-2">
@@ -90,7 +90,7 @@ export default function OrganizationsPage() {
               <Upload size={16} /> Bulk import
             </button>
             <button className="btn-primary flex items-center gap-2">
-              <Plus size={16} /> Add organisation
+              <Plus size={16} /> Add organization
             </button>
           </div>
         </div>
@@ -105,7 +105,7 @@ export default function OrganizationsPage() {
             />
             <input
               type="text"
-              placeholder="Search organisations"
+              placeholder="Search organizations"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="input w-full pl-10"
@@ -115,7 +115,7 @@ export default function OrganizationsPage() {
 
         {/* Count */}
         <p className="text-sm mb-4" style={{ color: 'var(--text-muted)' }}>
-          {filteredOrganizations.length} organisation{filteredOrganizations.length !== 1 ? 's' : ''}
+          {filteredOrganizations.length} organization{filteredOrganizations.length !== 1 ? 's' : ''}
         </p>
 
         {/* Table */}
@@ -144,13 +144,13 @@ export default function OrganizationsPage() {
               {loading ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-8 text-center" style={{ color: 'var(--text-muted)' }}>
-                    Loading organisations...
+                    Loading organizations...
                   </td>
                 </tr>
               ) : filteredOrganizations.length === 0 ? (
                 <tr>
                   <td colSpan={5} className="px-4 py-8 text-center" style={{ color: 'var(--text-muted)' }}>
-                    No organisations found
+                    No organizations found
                   </td>
                 </tr>
               ) : (

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { AzureDevOpsService, workItemToTicket } from '@/lib/devops';
+import { AzureDevOpsService } from '@/lib/devops';
 import type { Ticket, TicketStatus } from '@/types';
 
 export async function GET(request: NextRequest) {

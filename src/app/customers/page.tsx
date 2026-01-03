@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { MainLayout } from '@/components/layout';
 import { Avatar } from '@/components/common';
-import { Search, Plus, Upload, ExternalLink, AlertTriangle } from 'lucide-react';
+import { Search, Plus, Upload, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import type { Customer } from '@/types';
@@ -207,16 +207,9 @@ export default function CustomersPage() {
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
-                            {customer.email}
-                          </span>
-                          {customer.email.includes('@') && (
-                            <span title="Email not verified">
-                              <AlertTriangle size={14} style={{ color: 'var(--status-open)' }} />
-                            </span>
-                          )}
-                        </div>
+                        <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                          {customer.email}
+                        </span>
                       </td>
                       <td className="px-4 py-3">
                         {customer.tags.length > 0 ? (

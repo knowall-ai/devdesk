@@ -6,12 +6,9 @@ import {
   ArrowLeft,
   ExternalLink,
   Clock,
-  User,
-  Tag,
   Building2,
   Send,
   Paperclip,
-  MoreHorizontal,
 } from 'lucide-react';
 import Link from 'next/link';
 import type { Ticket, TicketComment } from '@/types';

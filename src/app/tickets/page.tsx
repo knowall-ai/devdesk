@@ -2,7 +2,7 @@
 
 import { useSession } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useState, Suspense } from 'react';
+import { useEffect, useState, Suspense, useCallback } from 'react';
 import { MainLayout } from '@/components/layout';
 import { TicketList } from '@/components/tickets';
 import type { Ticket } from '@/types';
@@ -36,13 +36,7 @@ function TicketsPageContent() {
     }
   }, [status, router]);
 
-  useEffect(() => {
-    if (session?.accessToken) {
-      fetchTickets();
-    }
-  }, [session, view]);
-
-  const fetchTickets = async () => {
+  const fetchTickets = useCallback(async () => {
     setLoading(true);
     try {
       const response = await fetch(`/api/devops/tickets?view=${view}`);
@@ -61,7 +55,13 @@ function TicketsPageContent() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [view]);
+
+  useEffect(() => {
+    if (session?.accessToken) {
+      fetchTickets();
+    }
+  }, [session, fetchTickets]);
 
   if (status === 'loading' || loading) {
     return (
