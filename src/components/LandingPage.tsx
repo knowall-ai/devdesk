@@ -61,7 +61,7 @@ export default function LandingPage() {
             onClick={() => signIn('azure-ad', { callbackUrl: '/' })}
             className="btn-primary text-sm py-2 px-4"
           >
-            Sign In
+            Sign in with Microsoft
           </button>
         </div>
       </header>
