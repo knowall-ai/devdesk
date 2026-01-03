@@ -1,8 +1,52 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { AzureDevOpsService } from '@/lib/devops';
+import { AzureDevOpsService, workItemToTicket } from '@/lib/devops';
 import type { Ticket, TicketStatus } from '@/types';
+
+export async function POST(request: NextRequest) {
+  try {
+    const session = await getServerSession(authOptions);
+
+    if (!session?.accessToken) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { project, title, description, priority, assignee, tags } = body;
+
+    if (!project || !title) {
+      return NextResponse.json(
+        { error: 'Project and title are required' },
+        { status: 400 }
+      );
+    }
+
+    const devopsService = new AzureDevOpsService(session.accessToken);
+
+    // Create the ticket with 'ticket' tag always included
+    const allTags = ['ticket', ...(tags || [])].filter(Boolean);
+    const workItem = await devopsService.createTicketWithAssignee(
+      project,
+      title,
+      description || '',
+      session.user?.email || 'unknown',
+      priority || 3,
+      allTags,
+      assignee
+    );
+
+    const ticket = workItemToTicket(workItem);
+
+    return NextResponse.json({ ticket, success: true });
+  } catch (error) {
+    console.error('Error creating ticket:', error);
+    return NextResponse.json(
+      { error: 'Failed to create ticket' },
+      { status: 500 }
+    );
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {

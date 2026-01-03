@@ -19,7 +19,7 @@ import PriorityIndicator from '../common/PriorityIndicator';
 interface TicketDetailProps {
   ticket: Ticket;
   comments: TicketComment[];
-  onAddComment?: (comment: string, isInternal: boolean) => Promise<void>;
+  onAddComment?: (comment: string) => Promise<void>;
   onStatusChange?: (status: string) => Promise<void>;
 }
 
@@ -30,7 +30,6 @@ export default function TicketDetail({
   onStatusChange,
 }: TicketDetailProps) {
   const [newComment, setNewComment] = useState('');
-  const [isInternal, setIsInternal] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const handleSubmitComment = async () => {
@@ -38,7 +37,7 @@ export default function TicketDetail({
 
     setIsSubmitting(true);
     try {
-      await onAddComment(newComment, isInternal);
+      await onAddComment(newComment);
       setNewComment('');
     } finally {
       setIsSubmitting(false);
@@ -151,33 +150,21 @@ export default function TicketDetail({
         {/* Reply box */}
         <div className="p-4 border-t" style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}>
           <div className="flex items-center gap-2 mb-3">
-            <button
-              onClick={() => setIsInternal(false)}
-              className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                !isInternal
-                  ? 'bg-[var(--primary)] text-white'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
-              }`}
+            <span
+              className="px-3 py-1.5 text-sm rounded-md bg-[var(--primary)] text-white"
             >
               Public reply
-            </button>
-            <button
-              onClick={() => setIsInternal(true)}
-              className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-                isInternal
-                  ? 'bg-[var(--status-pending)] text-white'
-                  : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
-              }`}
-            >
-              Internal note
-            </button>
+            </span>
+            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+              All comments are visible to customers in DevOps
+            </span>
           </div>
 
           <div className="relative">
             <textarea
               value={newComment}
               onChange={(e) => setNewComment(e.target.value)}
-              placeholder={isInternal ? 'Add an internal note...' : 'Type your reply...'}
+              placeholder="Type your reply..."
               className="input w-full min-h-[100px] resize-none pr-24"
             />
             <div className="absolute bottom-3 right-3 flex items-center gap-2">

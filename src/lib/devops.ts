@@ -256,6 +256,48 @@ export class AzureDevOpsService {
     return response.json();
   }
 
+  // Create a new work item (ticket) with assignee and custom tags
+  async createTicketWithAssignee(
+    projectName: string,
+    title: string,
+    description: string,
+    requesterEmail: string,
+    priority: number = 3,
+    tags: string[] = ['ticket'],
+    assigneeId?: string
+  ): Promise<DevOpsWorkItem> {
+    const patchDocument: Array<{ op: string; path: string; value: string | number }> = [
+      { op: 'add', path: '/fields/System.Title', value: title },
+      { op: 'add', path: '/fields/System.Description', value: description },
+      { op: 'add', path: '/fields/System.Tags', value: tags.join('; ') },
+      { op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: priority },
+      { op: 'add', path: '/fields/System.History', value: `Ticket created by ${requesterEmail}` },
+    ];
+
+    if (assigneeId) {
+      patchDocument.push({ op: 'add', path: '/fields/System.AssignedTo', value: assigneeId });
+    }
+
+    const response = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/$Task?api-version=7.0`,
+      {
+        method: 'POST',
+        headers: {
+          ...this.headers,
+          'Content-Type': 'application/json-patch+json',
+        },
+        body: JSON.stringify(patchDocument),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to create work item: ${response.statusText} - ${errorText}`);
+    }
+
+    return response.json();
+  }
+
   // Add a comment to a work item
   async addComment(projectName: string, workItemId: number, comment: string): Promise<void> {
     const response = await fetch(
