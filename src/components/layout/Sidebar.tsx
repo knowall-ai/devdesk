@@ -18,6 +18,7 @@ import {
   AlertCircle,
   CheckCircle,
   Star,
+  CalendarCheck,
 } from 'lucide-react';
 
 interface ViewItem {
@@ -39,6 +40,12 @@ const mainNavItems = [
     href: '/organizations',
   },
   { id: 'reporting', name: 'Reporting', icon: <BarChart3 size={20} />, href: '/reporting' },
+  {
+    id: 'monthly-checkpoint',
+    name: 'Monthly Checkpoint',
+    icon: <CalendarCheck size={20} />,
+    href: '/monthly-checkpoint',
+  },
   { id: 'admin', name: 'Admin', icon: <Settings size={20} />, href: '/admin' },
 ];
 
