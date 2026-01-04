@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, Suspense } from 'react';
 import { useSession } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { format, subDays, startOfMonth, endOfMonth, subMonths } from 'date-fns';
@@ -12,7 +12,7 @@ import type { MonthlyCheckpointStats, DevOpsProject, Ticket } from '@/types';
 
 type DatePreset = 'last30' | 'thisMonth' | 'lastMonth' | 'custom';
 
-export default function MonthlyCheckpointPage() {
+function MonthlyCheckpointContent() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -432,5 +432,19 @@ export default function MonthlyCheckpointPage() {
         }
       `}</style>
     </MainLayout>
+  );
+}
+
+export default function MonthlyCheckpointPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex h-screen items-center justify-center">
+          <Loader2 className="animate-spin" size={32} style={{ color: 'var(--primary)' }} />
+        </div>
+      }
+    >
+      <MonthlyCheckpointContent />
+    </Suspense>
   );
 }
