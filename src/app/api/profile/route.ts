@@ -1,18 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import type { UserProfile, UserProfileSettings, ProfileUpdateRequest } from '@/types';
+import { getProfileSettings } from '@/lib/profile-settings';
+import type { UserProfile, ProfileUpdateRequest } from '@/types';
 
 // In-memory storage for profile data (in production, use a database)
 const profileStore: Map<string, Partial<UserProfile>> = new Map();
-
-// Admin settings - in production, these would come from a database/admin panel
-const profileSettings: UserProfileSettings = {
-  allowViewProfile: true,
-  allowEditProfile: true,
-  allowChangePassword: false, // Disabled when using SSO
-  editableFields: ['displayName', 'phone', 'timezone', 'language'],
-};
 
 export async function GET() {
   try {
@@ -21,6 +14,8 @@ export async function GET() {
     if (!session?.user?.email) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
+
+    const profileSettings = getProfileSettings();
 
     if (!profileSettings.allowViewProfile) {
       return NextResponse.json({ error: 'Profile viewing is disabled' }, { status: 403 });
@@ -61,11 +56,26 @@ export async function PATCH(request: NextRequest) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const profileSettings = getProfileSettings();
+
     if (!profileSettings.allowEditProfile) {
       return NextResponse.json({ error: 'Profile editing is disabled' }, { status: 403 });
     }
 
     const body: ProfileUpdateRequest = await request.json();
+
+    // Validate displayName length if provided
+    if (body.displayName !== undefined) {
+      if (body.displayName.length === 0) {
+        return NextResponse.json({ error: 'Display name cannot be empty' }, { status: 400 });
+      }
+      if (body.displayName.length > 50) {
+        return NextResponse.json(
+          { error: 'Display name must be 50 characters or less' },
+          { status: 400 }
+        );
+      }
+    }
 
     // Validate that only allowed fields are being updated
     const updateKeys = Object.keys(body) as (keyof ProfileUpdateRequest)[];

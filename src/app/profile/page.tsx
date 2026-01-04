@@ -229,8 +229,15 @@ export default function ProfilePage() {
                   disabled={!isFieldEditable('displayName')}
                   className="input w-full"
                   placeholder="Enter your display name"
+                  required
+                  minLength={1}
+                  maxLength={50}
                 />
-                {!isFieldEditable('displayName') && (
+                {isFieldEditable('displayName') ? (
+                  <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                    Display name must be between 1 and 50 characters
+                  </p>
+                ) : (
                   <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                     This field is managed by your SSO provider
                   </p>

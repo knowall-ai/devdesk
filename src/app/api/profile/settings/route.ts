@@ -1,15 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import type { UserProfileSettings, UserProfile } from '@/types';
-
-// In-memory settings store (in production, use a database)
-let profileSettings: UserProfileSettings = {
-  allowViewProfile: true,
-  allowEditProfile: true,
-  allowChangePassword: false,
-  editableFields: ['displayName', 'phone', 'timezone', 'language'],
-};
+import {
+  getProfileSettings,
+  updateProfileSettings,
+  VALID_EDITABLE_FIELDS,
+} from '@/lib/profile-settings';
+import type { UserProfile } from '@/types';
 
 // Simple admin check - in production, implement proper role-based access
 function isAdmin(email: string): boolean {
@@ -18,6 +15,14 @@ function isAdmin(email: string): boolean {
   return !!email;
 }
 
+/**
+ * GET /api/profile/settings
+ *
+ * Returns profile settings to authenticated users.
+ * Note: This endpoint is intentionally accessible to all authenticated users
+ * (not just admins) because the frontend needs to know which fields are
+ * editable. Only the PATCH endpoint requires admin access to modify settings.
+ */
 export async function GET() {
   try {
     const session = await getServerSession(authOptions);
@@ -27,7 +32,7 @@ export async function GET() {
     }
 
     return NextResponse.json({
-      settings: profileSettings,
+      settings: getProfileSettings(),
       success: true,
     });
   } catch (error) {
@@ -52,11 +57,9 @@ export async function PATCH(request: NextRequest) {
     const { allowViewProfile, allowEditProfile, allowChangePassword, editableFields } = body;
 
     // Validate editableFields if provided
-    const validFields: (keyof UserProfile)[] = ['displayName', 'phone', 'timezone', 'language'];
-
     if (editableFields) {
       const invalidFields = editableFields.filter(
-        (field: string) => !validFields.includes(field as keyof UserProfile)
+        (field: string) => !VALID_EDITABLE_FIELDS.includes(field as keyof UserProfile)
       );
       if (invalidFields.length > 0) {
         return NextResponse.json(
@@ -67,15 +70,15 @@ export async function PATCH(request: NextRequest) {
     }
 
     // Update settings
-    profileSettings = {
-      allowViewProfile: allowViewProfile ?? profileSettings.allowViewProfile,
-      allowEditProfile: allowEditProfile ?? profileSettings.allowEditProfile,
-      allowChangePassword: allowChangePassword ?? profileSettings.allowChangePassword,
-      editableFields: editableFields ?? profileSettings.editableFields,
-    };
+    updateProfileSettings({
+      allowViewProfile: allowViewProfile ?? undefined,
+      allowEditProfile: allowEditProfile ?? undefined,
+      allowChangePassword: allowChangePassword ?? undefined,
+      editableFields: editableFields ?? undefined,
+    });
 
     return NextResponse.json({
-      settings: profileSettings,
+      settings: getProfileSettings(),
       success: true,
     });
   } catch (error) {
