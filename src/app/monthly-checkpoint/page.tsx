@@ -6,12 +6,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { format, subDays, startOfMonth, endOfMonth, subMonths } from 'date-fns';
 import { Calendar, Download, Plus, Loader2, RefreshCw } from 'lucide-react';
 import { MainLayout } from '@/components/layout';
-import {
-  KPICards,
-  TrendCharts,
-  CheckpointTicketTable,
-  NewTicketModal,
-} from '@/components/monthly-checkpoint';
+import { KPICards, TrendCharts, CheckpointTicketTable } from '@/components/monthly-checkpoint';
+import { NewTicketModal } from '@/components/tickets';
 import type { MonthlyCheckpointStats, DevOpsProject, Ticket } from '@/types';
 
 type DatePreset = 'last30' | 'thisMonth' | 'lastMonth' | 'custom';
