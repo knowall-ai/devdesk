@@ -7,7 +7,7 @@ import {
   Ticket,
   Users,
   Building2,
-  BarChart3,
+  Activity,
   Settings,
   Plus,
   RefreshCw,
@@ -39,7 +39,12 @@ const mainNavItems = [
     icon: <Building2 size={20} />,
     href: '/organizations',
   },
-  { id: 'reporting', name: 'Reporting', icon: <BarChart3 size={20} />, href: '/reporting' },
+  {
+    id: 'live-dashboard',
+    name: 'Live Dashboard',
+    icon: <Activity size={20} />,
+    href: '/reporting',
+  },
   {
     id: 'monthly-checkpoint',
     name: 'Monthly Checkpoint',
