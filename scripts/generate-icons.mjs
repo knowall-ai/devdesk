@@ -54,53 +54,53 @@ const icon512Svg = `<svg width="512" height="512" viewBox="0 0 512 512" xmlns="h
   <text x="256" y="340" font-family="Arial, sans-serif" font-size="290" font-weight="bold" fill="white" text-anchor="middle">D</text>
 </svg>`;
 
+async function generateIcon(svg, outputPath, width, height) {
+  try {
+    await sharp(Buffer.from(svg)).resize(width, height).png().toFile(outputPath);
+    console.log(`Created ${path.basename(outputPath)}`);
+  } catch (err) {
+    throw new Error(`Failed to generate ${path.basename(outputPath)}: ${err.message}`);
+  }
+}
+
 async function generateIcons() {
   console.log('Generating icons...');
 
-  // Generate favicon-32x32.png
-  await sharp(Buffer.from(faviconSvg))
-    .resize(32, 32)
-    .png()
-    .toFile(path.join(publicDir, 'favicon-32x32.png'));
-  console.log('Created favicon-32x32.png');
+  // Ensure public directory exists
+  if (!fs.existsSync(publicDir)) {
+    fs.mkdirSync(publicDir, { recursive: true });
+    console.log(`Created public directory: ${publicDir}`);
+  }
 
-  // Generate favicon-16x16.png
-  await sharp(Buffer.from(faviconSvg))
-    .resize(16, 16)
-    .png()
-    .toFile(path.join(publicDir, 'favicon-16x16.png'));
-  console.log('Created favicon-16x16.png');
+  // Generate favicon PNGs
+  await generateIcon(faviconSvg, path.join(publicDir, 'favicon-32x32.png'), 32, 32);
+  await generateIcon(faviconSvg, path.join(publicDir, 'favicon-16x16.png'), 16, 16);
 
   // Generate apple-touch-icon.png (180x180)
-  await sharp(Buffer.from(appleTouchSvg))
-    .resize(180, 180)
-    .png()
-    .toFile(path.join(publicDir, 'apple-touch-icon.png'));
-  console.log('Created apple-touch-icon.png');
+  await generateIcon(appleTouchSvg, path.join(publicDir, 'apple-touch-icon.png'), 180, 180);
 
-  // Generate icon-192x192.png for PWA
-  await sharp(Buffer.from(icon192Svg))
-    .resize(192, 192)
-    .png()
-    .toFile(path.join(publicDir, 'icon-192x192.png'));
-  console.log('Created icon-192x192.png');
-
-  // Generate icon-512x512.png for PWA
-  await sharp(Buffer.from(icon512Svg))
-    .resize(512, 512)
-    .png()
-    .toFile(path.join(publicDir, 'icon-512x512.png'));
-  console.log('Created icon-512x512.png');
+  // Generate PWA icons
+  await generateIcon(icon192Svg, path.join(publicDir, 'icon-192x192.png'), 192, 192);
+  await generateIcon(icon512Svg, path.join(publicDir, 'icon-512x512.png'), 512, 512);
 
   // Generate OG image PNG from SVG
   const ogSvgPath = path.join(publicDir, 'og-image.svg');
   if (fs.existsSync(ogSvgPath)) {
-    const ogSvg = fs.readFileSync(ogSvgPath);
-    await sharp(ogSvg).resize(1200, 630).png().toFile(path.join(publicDir, 'og-image.png'));
-    console.log('Created og-image.png');
+    try {
+      const ogSvg = fs.readFileSync(ogSvgPath);
+      await sharp(ogSvg).resize(1200, 630).png().toFile(path.join(publicDir, 'og-image.png'));
+      console.log('Created og-image.png');
+    } catch (err) {
+      throw new Error(`Failed to generate og-image.png: ${err.message}`);
+    }
+  } else {
+    console.warn(`Warning: ${ogSvgPath} not found, skipping OG image generation`);
   }
 
   console.log('All icons generated successfully!');
 }
 
-generateIcons().catch(console.error);
+generateIcons().catch((err) => {
+  console.error('Error generating icons:', err.message);
+  process.exit(1);
+});
