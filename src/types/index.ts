@@ -131,6 +131,34 @@ export interface EmailWebhookPayload {
   }>;
 }
 
+// User Profile types
+export interface UserProfile {
+  id: string;
+  displayName: string;
+  email: string;
+  phone?: string;
+  timezone: string;
+  avatarUrl?: string;
+  language: string;
+  ssoProvider?: string;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
+export interface UserProfileSettings {
+  allowViewProfile: boolean;
+  allowEditProfile: boolean;
+  allowChangePassword: boolean;
+  editableFields: (keyof UserProfile)[];
+}
+
+export interface ProfileUpdateRequest {
+  displayName?: string;
+  phone?: string;
+  timezone?: string;
+  language?: string;
+}
+
 // Session types extending next-auth
 export interface DevDeskSession {
   user: {

@@ -56,4 +56,44 @@ test.describe('API Routes', () => {
     });
     expect(response.status()).toBe(401);
   });
+
+  test('profile endpoint requires authentication', async ({ request }) => {
+    const response = await request.get('/api/profile');
+    expect(response.status()).toBe(401);
+
+    const data = await response.json();
+    expect(data).toHaveProperty('error');
+  });
+
+  test('profile PATCH endpoint requires authentication', async ({ request }) => {
+    const response = await request.patch('/api/profile', {
+      data: {
+        displayName: 'Test User',
+      },
+    });
+    expect(response.status()).toBe(401);
+
+    const data = await response.json();
+    expect(data).toHaveProperty('error');
+  });
+
+  test('profile settings endpoint requires authentication', async ({ request }) => {
+    const response = await request.get('/api/profile/settings');
+    expect(response.status()).toBe(401);
+
+    const data = await response.json();
+    expect(data).toHaveProperty('error');
+  });
+
+  test('profile settings PATCH endpoint requires authentication', async ({ request }) => {
+    const response = await request.patch('/api/profile/settings', {
+      data: {
+        allowEditProfile: true,
+      },
+    });
+    expect(response.status()).toBe(401);
+
+    const data = await response.json();
+    expect(data).toHaveProperty('error');
+  });
 });
