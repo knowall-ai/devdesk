@@ -126,7 +126,10 @@ export function NewTicketModal({
             <div className="flex gap-2">
               <button
                 type="button"
-                onClick={() => setTicketType('Feature')}
+                onClick={() => {
+                  setError(null);
+                  setTicketType('Feature');
+                }}
                 className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
                   ticketType === 'Feature' ? 'ring-2' : ''
                 }`}
@@ -141,7 +144,10 @@ export function NewTicketModal({
               </button>
               <button
                 type="button"
-                onClick={() => setTicketType('Bug')}
+                onClick={() => {
+                  setError(null);
+                  setTicketType('Bug');
+                }}
                 className={`flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors ${
                   ticketType === 'Bug' ? 'ring-2' : ''
                 }`}
@@ -166,7 +172,10 @@ export function NewTicketModal({
               type="text"
               placeholder="Enter ticket subject..."
               value={subject}
-              onChange={(e) => setSubject(e.target.value)}
+              onChange={(e) => {
+                setError(null);
+                setSubject(e.target.value);
+              }}
               className="input w-full"
               required
               disabled={isSubmitting}
@@ -181,7 +190,10 @@ export function NewTicketModal({
             <textarea
               placeholder="Describe the ticket..."
               value={description}
-              onChange={(e) => setDescription(e.target.value)}
+              onChange={(e) => {
+                setError(null);
+                setDescription(e.target.value);
+              }}
               className="input min-h-[100px] w-full resize-none"
               disabled={isSubmitting}
             />
@@ -194,7 +206,13 @@ export function NewTicketModal({
             </label>
             <select
               value={priority}
-              onChange={(e) => setPriority(parseInt(e.target.value))}
+              onChange={(e) => {
+                setError(null);
+                const parsed = parseInt(e.target.value, 10);
+                if (!isNaN(parsed) && parsed >= 1 && parsed <= 4) {
+                  setPriority(parsed);
+                }
+              }}
               className="input w-full"
               disabled={isSubmitting}
             >

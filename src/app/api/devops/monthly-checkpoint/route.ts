@@ -28,13 +28,15 @@ export async function GET(request: Request) {
     }
 
     // Default to last 30 days if no dates provided
-    const endDate = endDateParam ? new Date(endDateParam) : new Date();
-    const startDate = startDateParam
+    const endDateRaw = endDateParam ? new Date(endDateParam) : new Date();
+    const startDateRaw = startDateParam
       ? new Date(startDateParam)
-      : new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+      : new Date(endDateRaw.getTime() - 30 * 24 * 60 * 60 * 1000);
 
-    // Set time to start/end of day
+    // Set time to start/end of day (create new Date objects to avoid mutation)
+    const startDate = new Date(startDateRaw);
     startDate.setHours(0, 0, 0, 0);
+    const endDate = new Date(endDateRaw);
     endDate.setHours(23, 59, 59, 999);
 
     const devopsService = new AzureDevOpsService(session.accessToken);
@@ -135,7 +137,7 @@ function calculateKPIs(
   const SLA_RESPONSE_HOURS = 24;
   const ticketsWithinSLA = responseTimesHours.filter((h) => h <= SLA_RESPONSE_HOURS).length;
   const slaCompliancePercent =
-    responseTimesHours.length > 0 ? (ticketsWithinSLA / responseTimesHours.length) * 100 : 100;
+    responseTimesHours.length > 0 ? (ticketsWithinSLA / responseTimesHours.length) * 100 : 0;
 
   return {
     totalTicketsCreated: ticketsCreated.length,
