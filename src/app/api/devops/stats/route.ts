@@ -46,10 +46,32 @@ export async function GET() {
   }
 }
 
-function calculateAvgResponseTime(_tickets: Ticket[]): string {
-  // This would need actual first response data from DevOps
-  // For now, return a placeholder
-  return '< 2 hours';
+function calculateAvgResponseTime(tickets: Ticket[]): string {
+  // Calculate average first response time from tickets with firstResponseAt populated
+  const ticketsWithResponse = tickets.filter((t) => t.firstResponseAt && t.createdAt);
+
+  if (ticketsWithResponse.length === 0) {
+    return 'N/A';
+  }
+
+  const totalMinutes = ticketsWithResponse.reduce((sum, ticket) => {
+    const responseTime =
+      (ticket.firstResponseAt!.getTime() - ticket.createdAt.getTime()) / (1000 * 60);
+    return sum + responseTime;
+  }, 0);
+
+  const avgMinutes = totalMinutes / ticketsWithResponse.length;
+
+  // Format the average response time
+  if (avgMinutes < 60) {
+    return `${Math.round(avgMinutes)} min`;
+  } else if (avgMinutes < 1440) {
+    const hours = Math.round(avgMinutes / 60);
+    return `${hours} hour${hours !== 1 ? 's' : ''}`;
+  } else {
+    const days = Math.round(avgMinutes / 1440);
+    return `${days} day${days !== 1 ? 's' : ''}`;
+  }
 }
 
 interface SLAStats {

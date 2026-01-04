@@ -389,7 +389,48 @@ export class AzureDevOpsService {
         };
         const tickets = workItems.map((wi) => {
           const ticket = workItemToTicket(wi, organization);
-          // Calculate SLA info for the ticket
+
+          // Populate SLA-relevant timestamps from work item fields
+          const fields = wi.fields || {};
+
+          // Populate resolvedAt from known resolved date fields
+          if (!ticket.resolvedAt) {
+            const resolvedFieldNames = [
+              'Microsoft.VSTS.Common.ResolvedDate',
+              'Custom.ResolvedDate',
+              'System.ResolvedDate',
+            ];
+            for (const fieldName of resolvedFieldNames) {
+              const value = fields[fieldName as keyof typeof fields];
+              if (value) {
+                const resolvedDate = new Date(value as string);
+                if (!isNaN(resolvedDate.getTime())) {
+                  ticket.resolvedAt = resolvedDate;
+                  break;
+                }
+              }
+            }
+          }
+
+          // Populate firstResponseAt from known first-response date fields
+          if (!ticket.firstResponseAt) {
+            const firstResponseFieldNames = [
+              'Custom.FirstResponseDate',
+              'Microsoft.VSTS.Common.FirstResponseDate',
+            ];
+            for (const fieldName of firstResponseFieldNames) {
+              const value = fields[fieldName as keyof typeof fields];
+              if (value) {
+                const firstResponseDate = new Date(value as string);
+                if (!isNaN(firstResponseDate.getTime())) {
+                  ticket.firstResponseAt = firstResponseDate;
+                  break;
+                }
+              }
+            }
+          }
+
+          // Calculate SLA info for the ticket using the populated timestamps
           ticket.slaInfo = calculateTicketSLA(ticket, slaLevel);
           return ticket;
         });
@@ -561,25 +602,17 @@ interface SLAMapCache {
 
 let slaMapCache: SLAMapCache | null = null;
 
-// Fallback SLA mapping if DevOps query fails or PAT is not configured
-// NOTE: These are example/default values. In production, SLA levels should be
-// configured in each Azure DevOps project's description using format: "SLA: Gold"
-// This fallback ensures the system works during initial setup or if DevOps is unavailable.
-// TODO: Consider moving to environment variables for production deployments
-const FALLBACK_SLA_MAP: Record<string, SLALevel> = {
-  'Cairn Homes': 'Gold',
-  Medite: 'Silver',
-  KnowAll: 'Bronze',
-};
-
 // Fetch SLA map from DevOps project descriptions
+// SLA levels should be configured in each Azure DevOps project's description
+// using format: "SLA: Gold" or "sla=silver" or "SLA Level: Bronze"
+// Projects without SLA configured will use DEFAULT_SLA_LEVEL (Bronze)
 async function fetchSLAMapFromDevOps(): Promise<Record<string, SLALevel>> {
   const pat = process.env.AZURE_DEVOPS_PAT;
   const org = process.env.AZURE_DEVOPS_ORG || 'KnowAll';
 
   if (!pat) {
-    console.warn('AZURE_DEVOPS_PAT not set, using fallback SLA map');
-    return FALLBACK_SLA_MAP;
+    console.warn('AZURE_DEVOPS_PAT not set, SLA levels will use defaults');
+    return {};
   }
 
   try {
@@ -607,11 +640,10 @@ async function fetchSLAMapFromDevOps(): Promise<Record<string, SLALevel>> {
       }
     }
 
-    // Merge with fallback for projects without SLA in description
-    return { ...FALLBACK_SLA_MAP, ...slaMap };
+    return slaMap;
   } catch (error) {
     console.error('Failed to fetch SLA map from DevOps:', error);
-    return FALLBACK_SLA_MAP;
+    return {};
   }
 }
 
