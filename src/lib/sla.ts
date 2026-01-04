@@ -11,43 +11,69 @@ import type {
   Ticket,
 } from '@/types';
 
-// Hardcoded SLA Policies
-// These define response and resolution times for each SLA level
-// Times are in minutes
-// Future: These could be configurable via Azure DevOps extension
+// Hardcoded SLA Policies based on KnowAll Support Contracts
+// Inspired by Bitcoin blockchain fee market tiers
+//
+// IMPORTANT: Current Implementation Limitations
+// ---------------------------------------------
+// - Using calendar hours as approximation (not true business hours)
+// - Business hours are Mon-Fri 9am-5pm UK time (8 hours/day)
+// - UK bank holidays should be excluded (not yet implemented)
+// - Pending time (waiting for customer response) should pause SLA (not yet implemented)
+//
+// First Response: Time between ticket creation and first comment/response
+// Target Resolution: Time between ticket creation and resolution
+//
+// SLAs apply to incident-related tickets only (Tasks, Bugs, Questions).
+// Enhancements and Features are scheduled through backlog at Checkpoints.
+
+// Time constants in minutes
+const HOURS = 60;
+
+// Business day approximation using calendar hours
+// TODO: Implement proper business hours calculation (Mon-Fri 9am-5pm UK)
+// Actual business hours per day: 8 hours
+// Using 24 calendar hours as approximation for simplicity
+const BUSINESS_DAY = 24 * HOURS;
 
 export const SLA_POLICIES: Record<SLALevel, SLAPolicy> = {
   Gold: {
     level: 'Gold',
-    name: 'Gold SLA',
-    description: 'Premium support with fastest response times',
+    name: 'Gold SLA 🥇',
+    description:
+      'Like paying a higher miner fee — your transaction goes straight to the front of the queue. Priority scheduling, expedited turnaround, and strategic advisory sessions.',
     targets: {
-      urgent: { firstResponseMinutes: 15, resolutionMinutes: 4 * 60 }, // 15 min / 4 hours
-      high: { firstResponseMinutes: 30, resolutionMinutes: 8 * 60 }, // 30 min / 8 hours
-      normal: { firstResponseMinutes: 60, resolutionMinutes: 24 * 60 }, // 1 hour / 24 hours
-      low: { firstResponseMinutes: 4 * 60, resolutionMinutes: 72 * 60 }, // 4 hours / 72 hours
+      // Gold: 4 hour first response, 1 business day resolution
+      urgent: { firstResponseMinutes: 4 * HOURS, resolutionMinutes: 1 * BUSINESS_DAY },
+      high: { firstResponseMinutes: 4 * HOURS, resolutionMinutes: 1 * BUSINESS_DAY },
+      normal: { firstResponseMinutes: 4 * HOURS, resolutionMinutes: 1 * BUSINESS_DAY },
+      low: { firstResponseMinutes: 4 * HOURS, resolutionMinutes: 1 * BUSINESS_DAY },
     },
   },
   Silver: {
     level: 'Silver',
-    name: 'Silver SLA',
-    description: 'Standard support with balanced response times',
+    name: 'Silver SLA 🥈',
+    description:
+      'Comparable to a medium-fee transaction — confirmed more quickly with greater predictability. Proactive monitoring, backlog grooming, and higher-priority scheduling.',
     targets: {
-      urgent: { firstResponseMinutes: 30, resolutionMinutes: 8 * 60 }, // 30 min / 8 hours
-      high: { firstResponseMinutes: 60, resolutionMinutes: 16 * 60 }, // 1 hour / 16 hours
-      normal: { firstResponseMinutes: 4 * 60, resolutionMinutes: 48 * 60 }, // 4 hours / 48 hours
-      low: { firstResponseMinutes: 8 * 60, resolutionMinutes: 120 * 60 }, // 8 hours / 5 days
+      // Silver: 8 hour first response, 2 business days resolution
+      urgent: { firstResponseMinutes: 8 * HOURS, resolutionMinutes: 2 * BUSINESS_DAY },
+      high: { firstResponseMinutes: 8 * HOURS, resolutionMinutes: 2 * BUSINESS_DAY },
+      normal: { firstResponseMinutes: 8 * HOURS, resolutionMinutes: 2 * BUSINESS_DAY },
+      low: { firstResponseMinutes: 8 * HOURS, resolutionMinutes: 2 * BUSINESS_DAY },
     },
   },
   Bronze: {
     level: 'Bronze',
-    name: 'Bronze SLA',
-    description: 'Basic support with standard response times',
+    name: 'Bronze SLA 🥉',
+    description:
+      'Like a Bitcoin transaction with a low fee — it will get confirmed, but only when network capacity allows. Access to bug fixes, configuration tasks, questions, and small enhancements at a predictable rate.',
     targets: {
-      urgent: { firstResponseMinutes: 60, resolutionMinutes: 16 * 60 }, // 1 hour / 16 hours
-      high: { firstResponseMinutes: 4 * 60, resolutionMinutes: 24 * 60 }, // 4 hours / 24 hours
-      normal: { firstResponseMinutes: 8 * 60, resolutionMinutes: 72 * 60 }, // 8 hours / 72 hours
-      low: { firstResponseMinutes: 24 * 60, resolutionMinutes: 168 * 60 }, // 24 hours / 7 days
+      // Bronze: 16 hour first response, 3 business days resolution
+      urgent: { firstResponseMinutes: 16 * HOURS, resolutionMinutes: 3 * BUSINESS_DAY },
+      high: { firstResponseMinutes: 16 * HOURS, resolutionMinutes: 3 * BUSINESS_DAY },
+      normal: { firstResponseMinutes: 16 * HOURS, resolutionMinutes: 3 * BUSINESS_DAY },
+      low: { firstResponseMinutes: 16 * HOURS, resolutionMinutes: 3 * BUSINESS_DAY },
     },
   },
 };
