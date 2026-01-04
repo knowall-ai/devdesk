@@ -561,7 +561,11 @@ interface SLAMapCache {
 
 let slaMapCache: SLAMapCache | null = null;
 
-// Fallback SLA mapping if DevOps query fails
+// Fallback SLA mapping if DevOps query fails or PAT is not configured
+// NOTE: These are example/default values. In production, SLA levels should be
+// configured in each Azure DevOps project's description using format: "SLA: Gold"
+// This fallback ensures the system works during initial setup or if DevOps is unavailable.
+// TODO: Consider moving to environment variables for production deployments
 const FALLBACK_SLA_MAP: Record<string, SLALevel> = {
   'Cairn Homes': 'Gold',
   Medite: 'Silver',

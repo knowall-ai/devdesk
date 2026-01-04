@@ -14,17 +14,44 @@ interface SLALevelBadgeProps {
   size?: 'sm' | 'md';
 }
 
+// Status icons for visual indication
 const statusIcons: Record<SLAStatus, string> = {
-  within_sla: '',
-  at_risk: '',
-  breached: '',
+  within_sla: '✓',
+  at_risk: '⚠',
+  breached: '✗',
 };
 
+// CSS classes for SLA levels
 const levelClasses: Record<SLALevel, string> = {
   Gold: 'sla-level-gold',
   Silver: 'sla-level-silver',
   Bronze: 'sla-level-bronze',
 };
+
+// CSS classes for SLA status
+const statusClasses: Record<SLAStatus, string> = {
+  within_sla: 'sla-within',
+  at_risk: 'sla-at-risk',
+  breached: 'sla-breached',
+};
+
+/**
+ * Get the most critical SLA status from first response and resolution
+ * Priority: breached > at_risk > within_sla
+ */
+function getOverallSLAStatus(slaInfo: TicketSLAInfo): SLAStatus {
+  const statuses = [slaInfo.firstResponse.status, slaInfo.resolution.status];
+  if (statuses.includes('breached')) return 'breached';
+  if (statuses.includes('at_risk')) return 'at_risk';
+  return 'within_sla';
+}
+
+/**
+ * Get CSS class for a given SLA status
+ */
+function getStatusClass(status: SLAStatus): string {
+  return statusClasses[status];
+}
 
 export function SLALevelBadge({ level, size = 'md' }: SLALevelBadgeProps) {
   return (
@@ -47,22 +74,8 @@ export default function SLABadge({
     return null;
   }
 
-  // Get the most critical status between first response and resolution
-  const getOverallStatus = (): SLAStatus => {
-    const statuses = [slaInfo.firstResponse.status, slaInfo.resolution.status];
-
-    if (statuses.includes('breached')) return 'breached';
-    if (statuses.includes('at_risk')) return 'at_risk';
-    return 'within_sla';
-  };
-
-  const overallStatus = getOverallStatus();
-  const statusClass =
-    overallStatus === 'within_sla'
-      ? 'sla-within'
-      : overallStatus === 'at_risk'
-        ? 'sla-at-risk'
-        : 'sla-breached';
+  const overallStatus = getOverallSLAStatus(slaInfo);
+  const statusClass = getStatusClass(overallStatus);
 
   // For compact view, show the most urgent time remaining
   const getCompactDisplay = () => {
@@ -93,19 +106,23 @@ export default function SLABadge({
       <div className="flex items-center gap-2">
         {showLevel && <SLALevelBadge level={slaInfo.level} size="sm" />}
         <span className={`sla-badge ${statusClass}`}>
-          {statusIcons[overallStatus]}
-          {getCompactDisplay()}
+          {statusIcons[overallStatus]} {getCompactDisplay()}
         </span>
       </div>
     );
   }
 
   // Full variant with both first response and resolution times
+  const firstResponseClass = getStatusClass(slaInfo.firstResponse.status);
+  const resolutionClass = getStatusClass(slaInfo.resolution.status);
+
   return (
     <div className="space-y-2">
       {showLevel && (
         <div className="flex items-center gap-2">
-          <span className="text-xs text-gray-500">SLA Level:</span>
+          <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+            SLA Level:
+          </span>
           <SLALevelBadge level={slaInfo.level} />
         </div>
       )}
@@ -113,16 +130,9 @@ export default function SLABadge({
       <div className="space-y-1">
         {/* First Response */}
         <div className="flex items-center justify-between text-xs">
-          <span className="text-gray-500">First Response:</span>
-          <span
-            className={`sla-badge ${
-              slaInfo.firstResponse.status === 'within_sla'
-                ? 'sla-within'
-                : slaInfo.firstResponse.status === 'at_risk'
-                  ? 'sla-at-risk'
-                  : 'sla-breached'
-            }`}
-          >
+          <span style={{ color: 'var(--text-muted)' }}>First Response:</span>
+          <span className={`sla-badge ${firstResponseClass}`}>
+            {statusIcons[slaInfo.firstResponse.status]}{' '}
             {slaInfo.firstResponse.met
               ? `Met (${formatDuration(slaInfo.firstResponse.elapsedMinutes)})`
               : slaInfo.firstResponse.remainingMinutes > 0
@@ -133,16 +143,9 @@ export default function SLABadge({
 
         {/* Resolution */}
         <div className="flex items-center justify-between text-xs">
-          <span className="text-gray-500">Resolution:</span>
-          <span
-            className={`sla-badge ${
-              slaInfo.resolution.status === 'within_sla'
-                ? 'sla-within'
-                : slaInfo.resolution.status === 'at_risk'
-                  ? 'sla-at-risk'
-                  : 'sla-breached'
-            }`}
-          >
+          <span style={{ color: 'var(--text-muted)' }}>Resolution:</span>
+          <span className={`sla-badge ${resolutionClass}`}>
+            {statusIcons[slaInfo.resolution.status]}{' '}
             {slaInfo.resolution.met
               ? `Met (${formatDuration(slaInfo.resolution.elapsedMinutes)})`
               : slaInfo.resolution.remainingMinutes > 0
@@ -153,7 +156,10 @@ export default function SLABadge({
       </div>
 
       {/* SLA Target Info */}
-      <div className="border-t border-gray-700 pt-1 text-[10px] text-gray-600">
+      <div
+        className="border-t pt-1 text-[10px]"
+        style={{ borderColor: 'var(--border)', color: 'var(--text-muted)' }}
+      >
         Target: {formatDuration(slaInfo.firstResponse.targetMinutes)} response /{' '}
         {formatDuration(slaInfo.resolution.targetMinutes)} resolution
       </div>
@@ -165,24 +171,20 @@ export default function SLABadge({
 export function SLAStatusIndicator({ slaInfo }: { slaInfo?: TicketSLAInfo }) {
   if (!slaInfo) return null;
 
-  const getOverallStatus = (): SLAStatus => {
-    const statuses = [slaInfo.firstResponse.status, slaInfo.resolution.status];
-    if (statuses.includes('breached')) return 'breached';
-    if (statuses.includes('at_risk')) return 'at_risk';
-    return 'within_sla';
-  };
+  const status = getOverallSLAStatus(slaInfo);
 
-  const status = getOverallStatus();
-  const colorClass =
+  // Use CSS variables for consistent theming
+  const colorStyle =
     status === 'within_sla'
-      ? 'bg-green-500'
+      ? { backgroundColor: 'var(--status-resolved)' }
       : status === 'at_risk'
-        ? 'bg-yellow-500'
-        : 'bg-red-500';
+        ? { backgroundColor: 'var(--status-open)' }
+        : { backgroundColor: 'var(--priority-urgent)' };
 
   return (
     <span
-      className={`inline-block h-2 w-2 rounded-full ${colorClass}`}
+      className="inline-block h-2 w-2 rounded-full"
+      style={colorStyle}
       title={getSLAStatusLabel(status)}
     />
   );

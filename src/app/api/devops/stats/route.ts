@@ -81,18 +81,18 @@ function calculateSLAStats(tickets: Ticket[]): SLAStats {
   for (const ticket of activeTickets) {
     if (!ticket.slaInfo) continue;
 
-    // Get the worst status between first response and resolution
+    // Get the most critical status between first response and resolution
     const firstResponseStatus = ticket.slaInfo.firstResponse.status;
     const resolutionStatus = ticket.slaInfo.resolution.status;
 
-    let worstStatus: 'within_sla' | 'at_risk' | 'breached' = 'within_sla';
+    let criticalStatus: 'within_sla' | 'at_risk' | 'breached' = 'within_sla';
     if (firstResponseStatus === 'breached' || resolutionStatus === 'breached') {
-      worstStatus = 'breached';
+      criticalStatus = 'breached';
     } else if (firstResponseStatus === 'at_risk' || resolutionStatus === 'at_risk') {
-      worstStatus = 'at_risk';
+      criticalStatus = 'at_risk';
     }
 
-    switch (worstStatus) {
+    switch (criticalStatus) {
       case 'within_sla':
         withinSLA++;
         break;
@@ -104,18 +104,20 @@ function calculateSLAStats(tickets: Ticket[]): SLAStats {
         break;
     }
 
-    // Track by SLA level
+    // Track by SLA level - at_risk counts as compliant (not yet breached)
     const level = ticket.slaInfo.level.toLowerCase() as 'gold' | 'silver' | 'bronze';
     if (byLevel[level]) {
       byLevel[level].total++;
-      if (worstStatus !== 'breached') {
+      if (criticalStatus !== 'breached') {
         byLevel[level].compliant++;
       }
     }
   }
 
   const totalActive = activeTickets.length;
-  const complianceRate = totalActive > 0 ? Math.round((withinSLA / totalActive) * 100) : 100;
+  // Compliance rate: tickets not breached (within_sla + at_risk) / total
+  const compliantCount = withinSLA + atRisk;
+  const complianceRate = totalActive > 0 ? Math.round((compliantCount / totalActive) * 100) : 100;
 
   return {
     withinSLA,
