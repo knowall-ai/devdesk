@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 /**
  * React hook to fetch and manage the user's profile photo from Azure DevOps.
@@ -9,6 +9,7 @@ import { useState, useEffect } from 'react';
 export function useProfilePhoto(isAuthenticated: boolean) {
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const photoUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -27,6 +28,7 @@ export function useProfilePhoto(isAuthenticated: boolean) {
           const blob = await response.blob();
           const url = URL.createObjectURL(blob);
           if (isMounted) {
+            photoUrlRef.current = url;
             setPhotoUrl(url);
           }
         }
@@ -44,8 +46,8 @@ export function useProfilePhoto(isAuthenticated: boolean) {
     return () => {
       isMounted = false;
       // Revoke the object URL to prevent memory leaks
-      if (photoUrl) {
-        URL.revokeObjectURL(photoUrl);
+      if (photoUrlRef.current) {
+        URL.revokeObjectURL(photoUrlRef.current);
       }
     };
   }, [isAuthenticated]);
