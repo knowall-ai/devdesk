@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { MainLayout } from '@/components/layout';
 import { Avatar } from '@/components/common';
+import { useProfilePhoto } from '@/hooks';
 import { User, Mail, Building2, Clock, Globe, ExternalLink, Loader2 } from 'lucide-react';
 
 interface DevOpsProfile {
@@ -17,6 +18,7 @@ interface DevOpsProfile {
 
 export default function ProfilePage() {
   const { data: session, status } = useSession();
+  const { photoUrl } = useProfilePhoto(status === 'authenticated');
   const router = useRouter();
   const [profile, setProfile] = useState<DevOpsProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -97,7 +99,7 @@ export default function ProfilePage() {
           <div className="mb-6 flex items-center gap-4">
             <Avatar
               name={profile?.displayName || session.user?.name || 'User'}
-              image={session.user?.image ?? undefined}
+              image={photoUrl ?? undefined}
               size="lg"
             />
             <div>

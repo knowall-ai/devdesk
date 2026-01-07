@@ -5,9 +5,11 @@ import { signOut, useSession } from 'next-auth/react';
 import Link from 'next/link';
 import { Search, Bell, ChevronDown, LogOut, User, Settings } from 'lucide-react';
 import { Avatar } from '@/components/common';
+import { useProfilePhoto } from '@/hooks';
 
 export default function Header() {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
+  const { photoUrl } = useProfilePhoto(status === 'authenticated');
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -52,7 +54,7 @@ export default function Header() {
           >
             <Avatar
               name={session?.user?.name || 'User'}
-              image={session?.user?.image ?? undefined}
+              image={photoUrl ?? undefined}
               size="sm"
             />
             <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} />
