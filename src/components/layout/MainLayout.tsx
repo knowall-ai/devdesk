@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSession } from 'next-auth/react';
 import Sidebar from './Sidebar';
 import Header from './Header';
@@ -26,26 +26,30 @@ export default function MainLayout({ children }: MainLayoutProps) {
   const [ticketCounts, setTicketCounts] = useState<TicketCounts | undefined>();
 
   useEffect(() => {
+    const fetchTicketCounts = async () => {
+      try {
+        const response = await fetch('/api/devops/ticket-counts');
+        if (response.ok) {
+          const counts = await response.json();
+          setTicketCounts(counts);
+        }
+      } catch (error) {
+        console.error('Failed to fetch ticket counts:', error);
+      }
+    };
+
     if (session?.accessToken) {
       fetchTicketCounts();
     }
   }, [session]);
 
-  const fetchTicketCounts = async () => {
-    try {
-      const response = await fetch('/api/devops/ticket-counts');
-      if (response.ok) {
-        const counts = await response.json();
-        setTicketCounts(counts);
-      }
-    } catch (error) {
-      console.error('Failed to fetch ticket counts:', error);
-    }
-  };
-
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar ticketCounts={ticketCounts} onNewTicket={() => setIsNewTicketOpen(true)} />
+      <Suspense
+        fallback={<div className="w-60 shrink-0" style={{ backgroundColor: 'var(--sidebar)' }} />}
+      >
+        <Sidebar ticketCounts={ticketCounts} onNewTicket={() => setIsNewTicketOpen(true)} />
+      </Suspense>
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
         <main className="flex-1 overflow-auto" style={{ backgroundColor: 'var(--background)' }}>
