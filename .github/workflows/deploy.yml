@@ -1,9 +1,11 @@
 name: Deploy to Azure App Service
 
 on:
+  # Deploy when a release tag is created (e.g., v1.0.0)
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
+  # Allow manual deployment
   workflow_dispatch:
 
 env:
