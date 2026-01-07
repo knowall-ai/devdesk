@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSession } from 'next-auth/react';
 import Sidebar from './Sidebar';
 import Header from './Header';
@@ -45,7 +45,9 @@ export default function MainLayout({ children }: MainLayoutProps) {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar ticketCounts={ticketCounts} onNewTicket={() => setIsNewTicketOpen(true)} />
+      <Suspense fallback={<div className="w-60 shrink-0" style={{ backgroundColor: 'var(--sidebar)' }} />}>
+        <Sidebar ticketCounts={ticketCounts} onNewTicket={() => setIsNewTicketOpen(true)} />
+      </Suspense>
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
         <main className="flex-1 overflow-auto" style={{ backgroundColor: 'var(--background)' }}>
