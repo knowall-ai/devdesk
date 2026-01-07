@@ -3,15 +3,7 @@
 import { useState } from 'react';
 import { signOut, useSession } from 'next-auth/react';
 import Link from 'next/link';
-import {
-  Search,
-  MessageSquare,
-  Bell,
-  ChevronDown,
-  LogOut,
-  User,
-  Settings,
-} from 'lucide-react';
+import { Search, Bell, ChevronDown, LogOut, User, Settings } from 'lucide-react';
 import { Avatar } from '@/components/common';
 
 export default function Header() {
@@ -44,24 +36,6 @@ export default function Header() {
 
       {/* Right side actions */}
       <div className="ml-4 flex items-center gap-2">
-        {/* Conversations */}
-        <button
-          className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors"
-          style={{
-            color: 'var(--text-secondary)',
-            backgroundColor: 'transparent',
-          }}
-        >
-          <MessageSquare size={18} />
-          <span>Conversations</span>
-          <span
-            className="rounded-full px-1.5 py-0.5 text-xs"
-            style={{ backgroundColor: 'var(--primary)', color: 'white' }}
-          >
-            0
-          </span>
-        </button>
-
         {/* Notifications */}
         <button
           className="rounded-md p-2 transition-colors hover:bg-[var(--surface-hover)]"
