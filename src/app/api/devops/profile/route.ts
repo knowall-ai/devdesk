@@ -21,6 +21,9 @@ export async function GET() {
       email: profile.emailAddress,
       timezone: settings.timezone,
       locale: settings.locale,
+      country: settings.country,
+      datePattern: settings.datePattern,
+      timePattern: settings.timePattern,
     });
   } catch (error) {
     console.error('Error fetching profile:', error);

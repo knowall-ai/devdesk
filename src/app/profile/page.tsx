@@ -6,7 +6,17 @@ import { useEffect, useState } from 'react';
 import { MainLayout } from '@/components/layout';
 import { Avatar } from '@/components/common';
 import { useProfilePhoto } from '@/hooks';
-import { User, Mail, Building2, Clock, Globe, ExternalLink, Loader2 } from 'lucide-react';
+import {
+  User,
+  Mail,
+  MapPin,
+  Clock,
+  Globe,
+  Calendar,
+  Languages,
+  ExternalLink,
+  Loader2,
+} from 'lucide-react';
 
 interface DevOpsProfile {
   id: string;
@@ -14,6 +24,9 @@ interface DevOpsProfile {
   email: string;
   timezone: string;
   locale: string;
+  country: string;
+  datePattern: string;
+  timePattern: string;
 }
 
 export default function ProfilePage() {
@@ -112,12 +125,16 @@ export default function ProfilePage() {
             </div>
           </div>
 
+          <h3 className="mb-4 text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
+            Profile
+          </h3>
+
           <div className="space-y-4">
             <div className="flex items-center gap-3">
               <User size={18} style={{ color: 'var(--text-muted)' }} />
               <div>
                 <p className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-                  Display Name
+                  Full Name
                 </p>
                 <p style={{ color: 'var(--text-primary)' }}>
                   {profile?.displayName || session.user?.name || 'Not set'}
@@ -129,7 +146,7 @@ export default function ProfilePage() {
               <Mail size={18} style={{ color: 'var(--text-muted)' }} />
               <div>
                 <p className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-                  Email
+                  Contact Email
                 </p>
                 <p style={{ color: 'var(--text-primary)' }}>
                   {profile?.email || session.user?.email || 'Not set'}
@@ -138,32 +155,58 @@ export default function ProfilePage() {
             </div>
 
             <div className="flex items-center gap-3">
-              <Building2 size={18} style={{ color: 'var(--text-muted)' }} />
+              <MapPin size={18} style={{ color: 'var(--text-muted)' }} />
               <div>
                 <p className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-                  Account Provider
+                  Country/Region
                 </p>
-                <p style={{ color: 'var(--text-primary)' }}>Microsoft Azure AD</p>
+                <p style={{ color: 'var(--text-primary)' }}>
+                  {profile?.country || 'Not set'}
+                </p>
               </div>
             </div>
           </div>
         </div>
 
-        {/* Settings Card */}
-        <div className="card p-6">
+        {/* Time and Locale Card */}
+        <div className="card mb-6 p-6">
           <h3 className="mb-4 text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
-            Settings
+            Time and Locale
           </h3>
 
           <div className="space-y-4">
             <div className="flex items-center gap-3">
+              <Languages size={18} style={{ color: 'var(--text-muted)' }} />
+              <div>
+                <p className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
+                  Preferred Language
+                </p>
+                <p style={{ color: 'var(--text-primary)' }}>
+                  {profile?.locale || 'en-US'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <Calendar size={18} style={{ color: 'var(--text-muted)' }} />
+              <div>
+                <p className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
+                  Date Pattern
+                </p>
+                <p style={{ color: 'var(--text-primary)' }}>
+                  {profile?.datePattern || 'dd/MM/yyyy'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
               <Clock size={18} style={{ color: 'var(--text-muted)' }} />
               <div>
                 <p className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-                  Timezone
+                  Time Pattern
                 </p>
                 <p style={{ color: 'var(--text-primary)' }}>
-                  {profile?.timezone?.replace(/_/g, ' ') || 'UTC'}
+                  {profile?.timePattern || 'HH:mm'}
                 </p>
               </div>
             </div>
@@ -172,9 +215,11 @@ export default function ProfilePage() {
               <Globe size={18} style={{ color: 'var(--text-muted)' }} />
               <div>
                 <p className="text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-                  Locale
+                  Time Zone
                 </p>
-                <p style={{ color: 'var(--text-primary)' }}>{profile?.locale || 'en-US'}</p>
+                <p style={{ color: 'var(--text-primary)' }}>
+                  {profile?.timezone?.replace(/_/g, ' ') || 'UTC'}
+                </p>
               </div>
             </div>
 

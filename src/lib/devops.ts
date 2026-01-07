@@ -438,11 +438,14 @@ export class AzureDevOpsService {
     coreAttributes?: {
       TimeZone?: { value: string };
       Language?: { value: string };
+      Country?: { value: string };
+      DatePattern?: { value: string };
+      TimePattern?: { value: string };
     };
   }> {
-    // Use VSSPS API for profile data
+    // Use VSSPS API for profile data with core attributes
     const response = await fetch(
-      'https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.0',
+      'https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.0&details=true&coreAttributes=Country,TimeZone,Language,DatePattern,TimePattern',
       { headers: this.headers }
     );
 
@@ -453,19 +456,31 @@ export class AzureDevOpsService {
     return response.json();
   }
 
-  // Get user's notification settings (includes timezone)
+  // Get user's full settings including locale preferences
   async getUserSettings(): Promise<{
     timezone: string;
     locale: string;
+    country: string;
+    datePattern: string;
+    timePattern: string;
   }> {
     try {
       const profile = await this.getUserProfile();
       return {
         timezone: profile.coreAttributes?.TimeZone?.value || 'UTC',
         locale: profile.coreAttributes?.Language?.value || 'en-US',
+        country: profile.coreAttributes?.Country?.value || '',
+        datePattern: profile.coreAttributes?.DatePattern?.value || 'dd/MM/yyyy',
+        timePattern: profile.coreAttributes?.TimePattern?.value || 'HH:mm',
       };
     } catch {
-      return { timezone: 'UTC', locale: 'en-US' };
+      return {
+        timezone: 'UTC',
+        locale: 'en-US',
+        country: '',
+        datePattern: 'dd/MM/yyyy',
+        timePattern: 'HH:mm',
+      };
     }
   }
 }
