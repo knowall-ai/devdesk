@@ -6,6 +6,7 @@ import {
   Home,
   Ticket,
   Users,
+  UsersRound,
   Building2,
   BarChart3,
   Settings,
@@ -39,6 +40,7 @@ const mainNavItems = [
     icon: <Building2 size={20} />,
     href: '/organizations',
   },
+  { id: 'teams', name: 'Teams', icon: <UsersRound size={20} />, href: '/teams' },
   { id: 'reporting', name: 'Reporting', icon: <BarChart3 size={20} />, href: '/reporting' },
   { id: 'admin', name: 'Admin', icon: <Settings size={20} />, href: '/admin' },
 ];
