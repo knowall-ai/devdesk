@@ -64,28 +64,33 @@ export async function GET(request: NextRequest) {
       }));
     results.push(...matchingOrgs);
 
-    // Search users (from team members)
+    // Search users (from team members) - fetch in parallel to avoid N+1 queries
     const userMap = new Map<string, SearchResult>();
-    for (const project of projects.slice(0, 3)) {
-      try {
-        const members = await devopsService.getTeamMembers(project.name);
-        for (const member of members) {
-          if (
-            !userMap.has(member.email) &&
-            (member.displayName.toLowerCase().includes(query) ||
-              member.email.toLowerCase().includes(query))
-          ) {
-            userMap.set(member.email, {
-              type: 'user' as const,
-              id: member.id,
-              title: member.displayName,
-              subtitle: member.email,
-              url: `/users/${member.id}`,
-            });
-          }
+    const projectMembersArrays = await Promise.all(
+      projects.slice(0, 3).map(async (project) => {
+        try {
+          return await devopsService.getTeamMembers(project.name);
+        } catch {
+          return [];
         }
-      } catch {
-        // Skip if can't get team members
+      })
+    );
+
+    for (const members of projectMembersArrays) {
+      for (const member of members) {
+        if (
+          !userMap.has(member.email) &&
+          (member.displayName.toLowerCase().includes(query) ||
+            member.email.toLowerCase().includes(query))
+        ) {
+          userMap.set(member.email, {
+            type: 'user' as const,
+            id: member.id,
+            title: member.displayName,
+            subtitle: member.email,
+            url: `/users`,
+          });
+        }
       }
     }
     results.push(...Array.from(userMap.values()).slice(0, 3));

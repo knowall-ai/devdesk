@@ -45,7 +45,9 @@ export default function MainLayout({ children }: MainLayoutProps) {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Suspense fallback={<div className="w-60 shrink-0" style={{ backgroundColor: 'var(--sidebar)' }} />}>
+      <Suspense
+        fallback={<div className="w-60 shrink-0" style={{ backgroundColor: 'var(--sidebar)' }} />}
+      >
         <Sidebar ticketCounts={ticketCounts} onNewTicket={() => setIsNewTicketOpen(true)} />
       </Suspense>
       <div className="flex flex-1 flex-col overflow-hidden">

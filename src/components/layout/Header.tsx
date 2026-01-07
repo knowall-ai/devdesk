@@ -147,7 +147,7 @@ export default function Header() {
           <input
             ref={searchInputRef}
             type="text"
-            placeholder="Search tickets, users, organizations... (⌘K)"
+            placeholder="Search tickets, users, organizations... (Ctrl+K)"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={handleSearchKeyDown}
