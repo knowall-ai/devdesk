@@ -429,6 +429,81 @@ export class AzureDevOpsService {
 
     return allMembers;
   }
+
+  // Get current user's profile from Azure DevOps
+  async getUserProfile(): Promise<{
+    id: string;
+    displayName: string;
+    emailAddress: string;
+    coreAttributes?: {
+      TimeZone?: { value: string };
+      Language?: { value: string };
+      Country?: { value: string };
+      DatePattern?: { value: string };
+      TimePattern?: { value: string };
+    };
+  }> {
+    // Use VSSPS API for profile data with core attributes
+    const response = await fetch(
+      'https://app.vssps.visualstudio.com/_apis/profile/profiles/me?api-version=7.0&details=true&coreAttributes=Country,TimeZone,Language,DatePattern,TimePattern',
+      { headers: this.headers }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch user profile: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  // Get user's full settings including locale preferences
+  async getUserSettings(): Promise<{
+    timezone: string;
+    locale: string;
+    country: string;
+    datePattern: string;
+    timePattern: string;
+  }> {
+    try {
+      // Try to get user preferences from organization settings API
+      const prefsResponse = await fetch(
+        `${DEVOPS_BASE_URL}/_apis/settings/entries/me/UserPreferences?api-version=7.0`,
+        { headers: this.headers }
+      );
+
+      if (prefsResponse.ok) {
+        const prefs = await prefsResponse.json();
+        // Parse the settings from the response
+        const getValue = (key: string) => prefs.value?.[key]?.value || prefs[key] || '';
+
+        return {
+          timezone: getValue('TimeZone') || getValue('timezone') || '',
+          locale: getValue('Language') || getValue('locale') || '',
+          country: getValue('Country') || getValue('country') || '',
+          datePattern: getValue('DatePattern') || getValue('datePattern') || '',
+          timePattern: getValue('TimePattern') || getValue('timePattern') || '',
+        };
+      }
+
+      // Fallback to profile coreAttributes
+      const profile = await this.getUserProfile();
+      return {
+        timezone: profile.coreAttributes?.TimeZone?.value || '',
+        locale: profile.coreAttributes?.Language?.value || '',
+        country: profile.coreAttributes?.Country?.value || '',
+        datePattern: profile.coreAttributes?.DatePattern?.value || '',
+        timePattern: profile.coreAttributes?.TimePattern?.value || '',
+      };
+    } catch {
+      return {
+        timezone: '',
+        locale: '',
+        country: '',
+        datePattern: '',
+        timePattern: '',
+      };
+    }
+  }
 }
 
 // Email routing: Maps email domains to DevOps projects

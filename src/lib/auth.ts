@@ -1,5 +1,5 @@
 // NextAuth Configuration for Microsoft Azure AD
-import type { NextAuthOptions, Session, Account, User } from 'next-auth';
+import type { NextAuthOptions } from 'next-auth';
 import type { JWT } from 'next-auth/jwt';
 import AzureADProvider from 'next-auth/providers/azure-ad';
 
@@ -24,6 +24,7 @@ declare module 'next-auth/jwt' {
     accessTokenExpires?: number;
     error?: string;
     id?: string;
+    picture?: string;
   }
 }
 
@@ -50,7 +51,7 @@ export const authOptions: NextAuthOptions = {
     }),
   ],
   callbacks: {
-    async jwt({ token, account, user }: { token: JWT; account?: Account | null; user?: User }) {
+    async jwt({ token, account, user }) {
       // Initial sign in
       if (account && user) {
         return {
@@ -59,7 +60,8 @@ export const authOptions: NextAuthOptions = {
           refreshToken: account.refresh_token,
           accessTokenExpires: account.expires_at ? account.expires_at * 1000 : undefined,
           id: user.id,
-        };
+          picture: user.image ?? undefined,
+        } as JWT;
       }
 
       // Return previous token if the access token has not expired
@@ -70,11 +72,14 @@ export const authOptions: NextAuthOptions = {
       // Access token expired, try to refresh
       return await refreshAccessToken(token);
     },
-    async session({ session, token }: { session: Session; token: JWT }) {
+    async session({ session, token }) {
       session.accessToken = token.accessToken;
       session.error = token.error;
       if (token.id) {
         session.user.id = token.id;
+      }
+      if (token.picture) {
+        session.user.image = token.picture;
       }
       return session;
     },

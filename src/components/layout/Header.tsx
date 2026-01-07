@@ -6,10 +6,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import {
   Search,
-  MessageSquare,
   Bell,
-  Grid3X3,
-  HelpCircle,
   ChevronDown,
   LogOut,
   User,
@@ -19,6 +16,8 @@ import {
   Users,
   Loader2,
 } from 'lucide-react';
+import { Avatar } from '@/components/common';
+import { useProfilePhoto } from '@/hooks';
 
 interface SearchResult {
   type: 'ticket' | 'user' | 'organization';
@@ -30,7 +29,8 @@ interface SearchResult {
 }
 
 export default function Header() {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
+  const { photoUrl } = useProfilePhoto(status === 'authenticated');
   const router = useRouter();
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -242,24 +242,6 @@ export default function Header() {
 
       {/* Right side actions */}
       <div className="ml-4 flex items-center gap-2">
-        {/* Conversations */}
-        <button
-          className="flex items-center gap-2 rounded-md px-3 py-1.5 text-sm transition-colors"
-          style={{
-            color: 'var(--text-secondary)',
-            backgroundColor: 'transparent',
-          }}
-        >
-          <MessageSquare size={18} />
-          <span>Conversations</span>
-          <span
-            className="rounded-full px-1.5 py-0.5 text-xs"
-            style={{ backgroundColor: 'var(--primary)', color: 'white' }}
-          >
-            0
-          </span>
-        </button>
-
         {/* Notifications */}
         <button
           className="rounded-md p-2 transition-colors hover:bg-[var(--surface-hover)]"
@@ -268,34 +250,13 @@ export default function Header() {
           <Bell size={20} />
         </button>
 
-        {/* Apps grid */}
-        <button
-          className="rounded-md p-2 transition-colors hover:bg-[var(--surface-hover)]"
-          style={{ color: 'var(--text-secondary)' }}
-        >
-          <Grid3X3 size={20} />
-        </button>
-
-        {/* Help */}
-        <button
-          className="rounded-md p-2 transition-colors hover:bg-[var(--surface-hover)]"
-          style={{ color: 'var(--text-secondary)' }}
-        >
-          <HelpCircle size={20} />
-        </button>
-
         {/* User menu */}
         <div className="relative">
           <button
             onClick={() => setShowUserMenu(!showUserMenu)}
             className="flex items-center gap-2 rounded-md p-1 transition-colors hover:bg-[var(--surface-hover)]"
           >
-            <div
-              className="flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium"
-              style={{ backgroundColor: 'var(--primary)', color: 'white' }}
-            >
-              {session?.user?.name?.[0]?.toUpperCase() || 'U'}
-            </div>
+            <Avatar name={session?.user?.name || 'User'} image={photoUrl ?? undefined} size="sm" />
             <ChevronDown size={16} style={{ color: 'var(--text-muted)' }} />
           </button>
 
@@ -339,7 +300,7 @@ export default function Header() {
                 <div className="border-t py-1" style={{ borderColor: 'var(--border)' }}>
                   <button
                     onClick={() => signOut({ callbackUrl: '/login' })}
-                    className="flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                    className="flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
                     style={{ color: 'var(--priority-urgent)' }}
                   >
                     <LogOut size={16} />
