@@ -98,7 +98,7 @@ export default function Header() {
                 <div className="border-t py-1" style={{ borderColor: 'var(--border)' }}>
                   <button
                     onClick={() => signOut({ callbackUrl: '/login' })}
-                    className="flex w-full items-center gap-3 px-4 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                    className="flex w-full cursor-pointer items-center gap-3 px-4 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
                     style={{ color: 'var(--priority-urgent)' }}
                   >
                     <LogOut size={16} />
