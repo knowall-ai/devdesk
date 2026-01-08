@@ -91,6 +91,11 @@ function filterTicketsByView(tickets: Ticket[], view: string, userEmail?: string
       weekAgo.setDate(weekAgo.getDate() - 7);
       return tickets.filter((t) => t.updatedAt >= weekAgo);
 
+    case 'created-today':
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      return tickets.filter((t) => t.createdAt >= today);
+
     case 'pending':
       return tickets.filter((t) => t.status === 'Pending');
 

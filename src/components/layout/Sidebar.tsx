@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
 import {
@@ -11,12 +12,12 @@ import {
   Settings,
   Plus,
   RefreshCw,
-  ChevronDown,
   Inbox,
   Clock,
   UserCheck,
   AlertCircle,
   CheckCircle,
+  PlusCircle,
 } from 'lucide-react';
 import DevDeskIcon from '@/components/common/DevDeskIcon';
 
@@ -36,7 +37,7 @@ const mainNavItems = [
     id: 'projects',
     name: 'Projects',
     icon: <Building2 size={20} />,
-    href: '/organizations',
+    href: '/projects',
   },
   { id: 'reporting', name: 'Reporting', icon: <BarChart3 size={20} />, href: '/reporting' },
   { id: 'admin', name: 'Admin', icon: <Settings size={20} />, href: '/admin' },
@@ -50,6 +51,7 @@ interface SidebarProps {
     recentlyUpdated: number;
     pending: number;
     recentlySolved: number;
+    createdToday: number;
   };
   onNewTicket?: () => void;
 }
@@ -57,6 +59,12 @@ interface SidebarProps {
 export default function Sidebar({ ticketCounts, onNewTicket }: SidebarProps) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const [showNotImplemented, setShowNotImplemented] = useState(false);
+
+  const handleNotImplemented = () => {
+    setShowNotImplemented(true);
+    setTimeout(() => setShowNotImplemented(false), 3000);
+  };
 
   const counts = ticketCounts || {
     yourActive: 0,
@@ -65,6 +73,7 @@ export default function Sidebar({ ticketCounts, onNewTicket }: SidebarProps) {
     recentlyUpdated: 0,
     pending: 0,
     recentlySolved: 0,
+    createdToday: 0,
   };
 
   const viewItems: ViewItem[] = [
@@ -97,6 +106,13 @@ export default function Sidebar({ ticketCounts, onNewTicket }: SidebarProps) {
       count: counts.recentlyUpdated,
     },
     {
+      id: 'created-today',
+      name: 'Created today',
+      icon: <PlusCircle size={16} />,
+      href: '/tickets?view=created-today',
+      count: counts.createdToday,
+    },
+    {
       id: 'pending',
       name: 'Pending tickets',
       icon: <Clock size={16} />,
@@ -114,6 +130,23 @@ export default function Sidebar({ ticketCounts, onNewTicket }: SidebarProps) {
 
   return (
     <aside className="flex h-screen w-64 flex-col" style={{ backgroundColor: 'var(--sidebar-bg)' }}>
+      {/* Not implemented toast */}
+      {showNotImplemented && (
+        <div
+          className="fixed top-4 right-4 z-50 rounded-lg border px-4 py-3 shadow-lg"
+          style={{
+            backgroundColor: 'var(--surface)',
+            borderColor: 'var(--border)',
+            color: 'var(--text-primary)',
+          }}
+        >
+          <p className="font-medium">Not yet implemented</p>
+          <p className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+            Admin settings coming soon
+          </p>
+        </div>
+      )}
+
       {/* Logo */}
       <div className="border-b p-4" style={{ borderColor: 'var(--border)' }}>
         <Link href="/" className="flex items-center gap-2">
@@ -140,6 +173,21 @@ export default function Sidebar({ ticketCounts, onNewTicket }: SidebarProps) {
       <nav className="py-2">
         {mainNavItems.map((item) => {
           const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
+
+          // Admin link shows "Not implemented" toast instead of navigating
+          if (item.id === 'admin') {
+            return (
+              <button
+                key={item.id}
+                onClick={handleNotImplemented}
+                className={`nav-item mx-2 w-[calc(100%-1rem)] ${isActive ? 'active' : ''}`}
+              >
+                {item.icon}
+                <span className="text-sm">{item.name}</span>
+              </button>
+            );
+          }
+
           return (
             <Link
               key={item.id}

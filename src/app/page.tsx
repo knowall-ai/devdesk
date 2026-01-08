@@ -16,6 +16,7 @@ import {
   ArrowRight,
   Search,
   ArrowUpDown,
+  PlusCircle,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -24,6 +25,7 @@ interface DashboardStats {
   openTickets: number;
   pendingTickets: number;
   resolvedToday: number;
+  createdToday: number;
   avgResponseTime: string;
   customerSatisfaction: number;
 }
@@ -61,6 +63,7 @@ export default function HomePage() {
     openTickets: 0,
     pendingTickets: 0,
     resolvedToday: 0,
+    createdToday: 0,
     avgResponseTime: '-',
     customerSatisfaction: 0,
   });
@@ -137,6 +140,13 @@ export default function HomePage() {
       href: '/tickets?view=pending',
     },
     {
+      title: 'Created Today',
+      value: stats.createdToday,
+      icon: <PlusCircle size={24} />,
+      color: 'var(--status-new)',
+      href: '/tickets?view=created-today',
+    },
+    {
       title: 'Resolved Today',
       value: stats.resolvedToday,
       icon: <CheckCircle size={24} />,
@@ -166,7 +176,7 @@ export default function HomePage() {
         </div>
 
         {/* Stats cards */}
-        <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
+        <div className="mb-8 grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-5">
           {statCards.map((stat) => (
             <Link
               key={stat.title}
@@ -179,10 +189,9 @@ export default function HomePage() {
                     {stat.title}
                   </p>
                   {loading ? (
-                    <div
-                      className="h-9 w-16 animate-pulse rounded"
-                      style={{ backgroundColor: 'var(--surface-hover)' }}
-                    />
+                    <div className="flex h-9 items-center">
+                      <LoadingSpinner size="sm" />
+                    </div>
                   ) : (
                     <p className="text-3xl font-bold" style={{ color: stat.color }}>
                       {stat.value}
@@ -241,7 +250,7 @@ export default function HomePage() {
                 <ArrowRight size={16} style={{ color: 'var(--text-muted)' }} />
               </Link>
               <Link
-                href="/organizations"
+                href="/projects"
                 className="flex items-center justify-between rounded-lg p-3 transition-colors hover:bg-[var(--surface-hover)]"
               >
                 <div className="flex items-center gap-3">

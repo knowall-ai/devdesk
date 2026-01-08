@@ -1,10 +1,21 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { format } from 'date-fns';
-import { ArrowLeft, ExternalLink, Clock, Building2, Send, Paperclip } from 'lucide-react';
+import {
+  ArrowLeft,
+  ExternalLink,
+  Clock,
+  Building2,
+  Send,
+  Paperclip,
+  ChevronDown,
+  Search,
+  Loader2,
+  User as UserIcon,
+} from 'lucide-react';
 import Link from 'next/link';
-import type { Ticket, TicketComment } from '@/types';
+import type { Ticket, TicketComment, User, TicketPriority } from '@/types';
 import StatusBadge from '../common/StatusBadge';
 import Avatar from '../common/Avatar';
 import PriorityIndicator from '../common/PriorityIndicator';
@@ -14,16 +25,83 @@ interface TicketDetailProps {
   comments: TicketComment[];
   onAddComment?: (comment: string) => Promise<void>;
   onStatusChange?: (status: string) => Promise<void>;
+  onAssigneeChange?: (assigneeId: string | null) => Promise<void>;
+  onPriorityChange?: (priority: number) => Promise<void>;
 }
+
+const priorityOptions: Array<{ value: number; label: TicketPriority }> = [
+  { value: 1, label: 'Urgent' },
+  { value: 2, label: 'High' },
+  { value: 3, label: 'Normal' },
+  { value: 4, label: 'Low' },
+];
 
 export default function TicketDetail({
   ticket,
   comments,
   onAddComment,
-  onStatusChange,
+  onStatusChange: _onStatusChange,
+  onAssigneeChange,
+  onPriorityChange,
 }: TicketDetailProps) {
   const [newComment, setNewComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Assignee editing state
+  const [isAssigneeDropdownOpen, setIsAssigneeDropdownOpen] = useState(false);
+  const [assigneeSearch, setAssigneeSearch] = useState('');
+  const [teamMembers, setTeamMembers] = useState<User[]>([]);
+  const [isLoadingMembers, setIsLoadingMembers] = useState(false);
+  const [isUpdatingAssignee, setIsUpdatingAssignee] = useState(false);
+
+  // Priority editing state
+  const [isPriorityDropdownOpen, setIsPriorityDropdownOpen] = useState(false);
+  const [isUpdatingPriority, setIsUpdatingPriority] = useState(false);
+
+  // Fetch team members when assignee dropdown opens
+  useEffect(() => {
+    if (isAssigneeDropdownOpen && teamMembers.length === 0 && ticket.project) {
+      fetchTeamMembers();
+    }
+  }, [isAssigneeDropdownOpen, ticket.project]);
+
+  const fetchTeamMembers = async () => {
+    if (!ticket.project) return;
+    setIsLoadingMembers(true);
+    try {
+      const response = await fetch(
+        `/api/devops/projects/${encodeURIComponent(ticket.project)}/members`
+      );
+      if (response.ok) {
+        const data = await response.json();
+        setTeamMembers(data.members || []);
+      }
+    } catch (err) {
+      console.error('Failed to fetch team members:', err);
+    } finally {
+      setIsLoadingMembers(false);
+    }
+  };
+
+  // Filter members based on search (exclude stakeholders)
+  const filteredMembers = useMemo(() => {
+    return teamMembers
+      .filter((member) => {
+        const isStakeholder =
+          member.accessLevel?.toLowerCase().includes('stakeholder') ||
+          member.licenseType?.toLowerCase().includes('stakeholder');
+        return !isStakeholder;
+      })
+      .filter((member) => {
+        if (!assigneeSearch) return true;
+        const search = assigneeSearch.toLowerCase();
+        return (
+          member.displayName.toLowerCase().includes(search) ||
+          member.email?.toLowerCase().includes(search)
+        );
+      })
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }, [teamMembers, assigneeSearch]);
 
   const handleSubmitComment = async () => {
     if (!newComment.trim() || !onAddComment) return;
@@ -34,6 +112,29 @@ export default function TicketDetail({
       setNewComment('');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleAssigneeSelect = async (memberId: string | null) => {
+    if (!onAssigneeChange) return;
+    setIsUpdatingAssignee(true);
+    try {
+      await onAssigneeChange(memberId);
+      setIsAssigneeDropdownOpen(false);
+      setAssigneeSearch('');
+    } finally {
+      setIsUpdatingAssignee(false);
+    }
+  };
+
+  const handlePrioritySelect = async (priority: number) => {
+    if (!onPriorityChange) return;
+    setIsUpdatingPriority(true);
+    try {
+      await onPriorityChange(priority);
+      setIsPriorityDropdownOpen(false);
+    } finally {
+      setIsUpdatingPriority(false);
     }
   };
 
@@ -198,39 +299,114 @@ export default function TicketDetail({
           </h3>
 
           <div className="space-y-4">
-            {/* Assignee */}
-            <div>
+            {/* Assignee - Editable */}
+            <div className="relative">
               <label
                 className="mb-1 block text-xs uppercase"
                 style={{ color: 'var(--text-muted)' }}
               >
                 Assignee
               </label>
-              {ticket.assignee ? (
-                <div className="flex items-center gap-2">
-                  <Avatar
-                    name={ticket.assignee.displayName}
-                    image={ticket.assignee.avatarUrl}
-                    size="sm"
-                  />
-                  <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
-                    {ticket.assignee.displayName}
+              <button
+                onClick={() => setIsAssigneeDropdownOpen(!isAssigneeDropdownOpen)}
+                disabled={!onAssigneeChange || isUpdatingAssignee}
+                className="flex w-full items-center justify-between rounded p-2 text-left transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                style={{ cursor: onAssigneeChange ? 'pointer' : 'default' }}
+              >
+                {isUpdatingAssignee ? (
+                  <div className="flex items-center gap-2">
+                    <Loader2 size={14} className="animate-spin" />
+                    <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                      Updating...
+                    </span>
+                  </div>
+                ) : ticket.assignee ? (
+                  <div className="flex items-center gap-2">
+                    <Avatar
+                      name={ticket.assignee.displayName}
+                      image={ticket.assignee.avatarUrl}
+                      size="sm"
+                    />
+                    <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                      {ticket.assignee.displayName}
+                    </span>
+                  </div>
+                ) : (
+                  <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                    Unassigned
                   </span>
+                )}
+                {onAssigneeChange && <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />}
+              </button>
+
+              {/* Assignee dropdown */}
+              {isAssigneeDropdownOpen && (
+                <div
+                  className="absolute top-full left-0 z-50 mt-1 w-full rounded-md shadow-lg"
+                  style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--border)' }}
+                >
+                  {/* Search input */}
+                  <div className="border-b p-2" style={{ borderColor: 'var(--border)' }}>
+                    <div className="relative">
+                      <Search
+                        size={14}
+                        className="absolute top-1/2 left-2 -translate-y-1/2"
+                        style={{ color: 'var(--text-muted)' }}
+                      />
+                      <input
+                        type="text"
+                        placeholder="Search users..."
+                        value={assigneeSearch}
+                        onChange={(e) => setAssigneeSearch(e.target.value)}
+                        className="input w-full pl-7 text-sm"
+                        autoFocus
+                      />
+                    </div>
+                  </div>
+                  {/* Options */}
+                  <div className="max-h-48 overflow-auto">
+                    {/* Unassign option */}
+                    <button
+                      onClick={() => handleAssigneeSelect(null)}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                      style={{ color: 'var(--text-muted)', cursor: 'pointer' }}
+                    >
+                      <UserIcon size={14} />
+                      Unassigned
+                    </button>
+                    {isLoadingMembers ? (
+                      <div
+                        className="flex items-center justify-center gap-2 p-3"
+                        style={{ color: 'var(--text-muted)' }}
+                      >
+                        <Loader2 size={14} className="animate-spin" />
+                        Loading...
+                      </div>
+                    ) : (
+                      filteredMembers.map((member) => (
+                        <button
+                          key={member.id}
+                          onClick={() => handleAssigneeSelect(member.email || member.id)}
+                          className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                          style={{ color: 'var(--text-primary)', cursor: 'pointer' }}
+                        >
+                          <Avatar name={member.displayName} image={member.avatarUrl} size="sm" />
+                          {member.displayName}
+                        </button>
+                      ))
+                    )}
+                  </div>
                 </div>
-              ) : (
-                <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                  Unassigned
-                </span>
               )}
             </div>
 
-            {/* Requester */}
+            {/* Created By (Requester) */}
             <div>
               <label
                 className="mb-1 block text-xs uppercase"
                 style={{ color: 'var(--text-muted)' }}
               >
-                Requester
+                Created By
               </label>
               <div className="flex items-center gap-2">
                 <Avatar
@@ -249,15 +425,51 @@ export default function TicketDetail({
               </div>
             </div>
 
-            {/* Priority */}
-            <div>
+            {/* Priority - Editable */}
+            <div className="relative">
               <label
                 className="mb-1 block text-xs uppercase"
                 style={{ color: 'var(--text-muted)' }}
               >
                 Priority
               </label>
-              <PriorityIndicator priority={ticket.priority} showLabel />
+              <button
+                onClick={() => setIsPriorityDropdownOpen(!isPriorityDropdownOpen)}
+                disabled={!onPriorityChange || isUpdatingPriority}
+                className="flex w-full items-center justify-between rounded p-2 text-left transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+                style={{ cursor: onPriorityChange ? 'pointer' : 'default' }}
+              >
+                {isUpdatingPriority ? (
+                  <div className="flex items-center gap-2">
+                    <Loader2 size={14} className="animate-spin" />
+                    <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                      Updating...
+                    </span>
+                  </div>
+                ) : (
+                  <PriorityIndicator priority={ticket.priority} showLabel />
+                )}
+                {onPriorityChange && <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />}
+              </button>
+
+              {/* Priority dropdown */}
+              {isPriorityDropdownOpen && (
+                <div
+                  className="absolute top-full left-0 z-50 mt-1 w-full rounded-md shadow-lg"
+                  style={{ backgroundColor: 'var(--surface)', border: '1px solid var(--border)' }}
+                >
+                  {priorityOptions.map((option) => (
+                    <button
+                      key={option.value}
+                      onClick={() => handlePrioritySelect(option.value)}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                      style={{ cursor: 'pointer' }}
+                    >
+                      <PriorityIndicator priority={option.label} showLabel />
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* Project */}

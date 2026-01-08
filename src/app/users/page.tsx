@@ -17,6 +17,7 @@ export default function UsersPage() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [domainFilter, setDomainFilter] = useState<string>('all');
+  const [accessLevelFilter, setAccessLevelFilter] = useState<string>('all');
   const [showNotImplemented, setShowNotImplemented] = useState(false);
 
   useEffect(() => {
@@ -55,12 +56,18 @@ export default function UsersPage() {
     new Set(users.map((user) => user.email.split('@')[1]).filter(Boolean))
   ).sort();
 
+  // Get unique access levels for filter dropdown
+  const accessLevels = Array.from(
+    new Set(users.map((user) => user.license).filter(Boolean))
+  ).sort();
+
   const filteredUsers = users.filter((user) => {
     const matchesSearch =
       user.displayName.toLowerCase().includes(searchQuery.toLowerCase()) ||
       user.email.toLowerCase().includes(searchQuery.toLowerCase());
     const matchesDomain = domainFilter === 'all' || user.email.endsWith(`@${domainFilter}`);
-    return matchesSearch && matchesDomain;
+    const matchesAccessLevel = accessLevelFilter === 'all' || user.license === accessLevelFilter;
+    return matchesSearch && matchesDomain && matchesAccessLevel;
   });
 
   const handleNotImplemented = () => {
@@ -121,11 +128,13 @@ export default function UsersPage() {
               Search and manage your users all in one place.
             </p>
             <a
-              href="#"
+              href="https://dev.azure.com/KnowAll/_settings/users"
+              target="_blank"
+              rel="noopener noreferrer"
               className="mt-1 flex items-center gap-1 text-sm"
               style={{ color: 'var(--primary)' }}
             >
-              Learn about this page <ExternalLink size={12} />
+              See users in Azure DevOps <ExternalLink size={12} />
             </a>
           </div>
           <div className="flex items-center gap-2">
@@ -169,6 +178,18 @@ export default function UsersPage() {
               </option>
             ))}
           </select>
+          <select
+            value={accessLevelFilter}
+            onChange={(e) => setAccessLevelFilter(e.target.value)}
+            className="input"
+          >
+            <option value="all">All access levels</option>
+            {accessLevels.map((level) => (
+              <option key={level} value={level}>
+                {level}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* Count */}
@@ -200,6 +221,12 @@ export default function UsersPage() {
                   className="px-4 py-3 text-left text-xs font-medium uppercase"
                   style={{ color: 'var(--text-muted)' }}
                 >
+                  Access Level
+                </th>
+                <th
+                  className="px-4 py-3 text-left text-xs font-medium uppercase"
+                  style={{ color: 'var(--text-muted)' }}
+                >
                   Timezone
                 </th>
                 <th
@@ -213,14 +240,14 @@ export default function UsersPage() {
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={5} className="px-4 py-12">
+                  <td colSpan={6} className="px-4 py-12">
                     <LoadingSpinner size="lg" message="Loading users..." />
                   </td>
                 </tr>
               ) : filteredUsers.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={5}
+                    colSpan={6}
                     className="px-4 py-8 text-center"
                     style={{ color: 'var(--text-muted)' }}
                   >
@@ -249,6 +276,9 @@ export default function UsersPage() {
                       <span className="text-sm" style={{ color: 'var(--text-secondary)' }}>
                         {user.email}
                       </span>
+                    </td>
+                    <td className="px-4 py-3 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      {user.license || '-'}
                     </td>
                     <td className="px-4 py-3 text-sm" style={{ color: 'var(--text-secondary)' }}>
                       {user.timezone}
