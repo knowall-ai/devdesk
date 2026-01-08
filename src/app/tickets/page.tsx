@@ -14,6 +14,7 @@ const viewTitles: Record<string, string> = {
   unassigned: 'Unassigned tickets',
   'all-active': 'All active tickets',
   'recently-updated': 'Recently updated tickets',
+  'created-today': 'Created today',
   pending: 'Pending tickets',
   'recently-solved': 'Recently solved tickets',
   removed: 'Removed tickets',

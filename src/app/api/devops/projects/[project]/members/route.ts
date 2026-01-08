@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { AzureDevOpsService } from '@/lib/devops';
+import type { User } from '@/types';
 
 export async function GET(
   request: NextRequest,
@@ -15,10 +16,22 @@ export async function GET(
     }
 
     const { project } = await params;
-    const projectName = decodeURIComponent(project);
+    const _projectName = decodeURIComponent(project);
 
     const devopsService = new AzureDevOpsService(session.accessToken);
-    const members = await devopsService.getTeamMembers(projectName);
+
+    // Get all users with entitlements (includes users not on specific teams)
+    const allUsers = await devopsService.getAllUsersWithEntitlements();
+
+    // Map to User type with accessLevel
+    const members: User[] = allUsers.map((user) => ({
+      id: user.id,
+      displayName: user.displayName,
+      email: user.email,
+      avatarUrl: user.avatarUrl,
+      accessLevel: user.license,
+      licenseType: user.license,
+    }));
 
     return NextResponse.json({
       members,

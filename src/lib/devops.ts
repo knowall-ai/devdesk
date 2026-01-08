@@ -34,8 +34,8 @@ function mapStateToStatus(state: string): TicketStatus {
 }
 
 // Map priority numbers to Zendesk-like priorities
-function mapPriority(priority?: number): TicketPriority {
-  if (!priority) return 'Normal';
+function mapPriority(priority?: number): TicketPriority | undefined {
+  if (!priority) return undefined;
   if (priority === 1) return 'Urgent';
   if (priority === 2) return 'High';
   if (priority === 3) return 'Normal';
@@ -250,7 +250,7 @@ export class AzureDevOpsService {
     projectName: string,
     title: string,
     description: string,
-    requesterEmail: string,
+    _requesterEmail: string,
     priority: number = 3
   ): Promise<DevOpsWorkItem> {
     const patchDocument = [
@@ -258,7 +258,6 @@ export class AzureDevOpsService {
       { op: 'add', path: '/fields/System.Description', value: description },
       { op: 'add', path: '/fields/System.Tags', value: 'ticket' },
       { op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: priority },
-      { op: 'add', path: '/fields/System.History', value: `Ticket created by ${requesterEmail}` },
     ];
 
     const response = await fetch(
@@ -285,7 +284,7 @@ export class AzureDevOpsService {
     projectName: string,
     title: string,
     description: string,
-    requesterEmail: string,
+    _requesterEmail: string,
     priority: number = 3,
     tags: string[] = ['ticket'],
     assigneeId?: string
@@ -295,7 +294,6 @@ export class AzureDevOpsService {
       { op: 'add', path: '/fields/System.Description', value: description },
       { op: 'add', path: '/fields/System.Tags', value: tags.join('; ') },
       { op: 'add', path: '/fields/Microsoft.VSTS.Common.Priority', value: priority },
-      { op: 'add', path: '/fields/System.History', value: `Ticket created by ${requesterEmail}` },
     ];
 
     if (assigneeId) {
@@ -360,6 +358,62 @@ export class AzureDevOpsService {
 
     if (!response.ok) {
       throw new Error(`Failed to update work item: ${response.statusText}`);
+    }
+
+    return response.json();
+  }
+
+  // Update work item fields (assignee, priority)
+  async updateTicketFields(
+    projectName: string,
+    workItemId: number,
+    updates: {
+      assignee?: string | null;
+      priority?: number;
+    }
+  ): Promise<DevOpsWorkItem> {
+    const patchDocument: Array<{ op: string; path: string; value: string | number | null }> = [];
+
+    if (updates.assignee !== undefined) {
+      if (updates.assignee === null) {
+        // Remove assignee
+        patchDocument.push({ op: 'remove', path: '/fields/System.AssignedTo', value: null });
+      } else {
+        patchDocument.push({
+          op: 'add',
+          path: '/fields/System.AssignedTo',
+          value: updates.assignee,
+        });
+      }
+    }
+
+    if (updates.priority !== undefined) {
+      patchDocument.push({
+        op: 'add',
+        path: '/fields/Microsoft.VSTS.Common.Priority',
+        value: updates.priority,
+      });
+    }
+
+    if (patchDocument.length === 0) {
+      throw new Error('No updates provided');
+    }
+
+    const response = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/${workItemId}?api-version=7.0`,
+      {
+        method: 'PATCH',
+        headers: {
+          ...this.headers,
+          'Content-Type': 'application/json-patch+json',
+        },
+        body: JSON.stringify(patchDocument),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to update work item: ${response.statusText} - ${errorText}`);
     }
 
     return response.json();
@@ -503,6 +557,93 @@ export class AzureDevOpsService {
         timePattern: '',
       };
     }
+  }
+
+  // Get user entitlements (license info) from Azure DevOps
+  async getUserEntitlements(): Promise<Map<string, string>> {
+    const licenseMap = new Map<string, string>();
+
+    try {
+      // Use VSAEX API for user entitlements
+      const response = await fetch(
+        `https://vsaex.dev.azure.com/${this.organization}/_apis/userentitlements?api-version=7.0&top=500`,
+        { headers: this.headers }
+      );
+
+      if (!response.ok) {
+        console.error('Failed to fetch user entitlements:', response.statusText);
+        return licenseMap;
+      }
+
+      const data = await response.json();
+      for (const member of data.members || []) {
+        const email = member.user?.principalName?.toLowerCase();
+        const license =
+          member.accessLevel?.licenseDisplayName || member.accessLevel?.accountLicenseType;
+        if (email && license) {
+          licenseMap.set(email, license);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching user entitlements:', error);
+    }
+
+    return licenseMap;
+  }
+
+  // Get all users with their entitlement/license info
+  async getAllUsersWithEntitlements(): Promise<
+    Array<{
+      id: string;
+      displayName: string;
+      email: string;
+      license: string;
+      avatarUrl?: string;
+    }>
+  > {
+    const users: Array<{
+      id: string;
+      displayName: string;
+      email: string;
+      license: string;
+      avatarUrl?: string;
+    }> = [];
+
+    try {
+      const response = await fetch(
+        `https://vsaex.dev.azure.com/${this.organization}/_apis/userentitlements?api-version=7.0&top=500`,
+        { headers: this.headers }
+      );
+
+      if (!response.ok) {
+        console.error('Failed to fetch user entitlements:', response.statusText);
+        return users;
+      }
+
+      const data = await response.json();
+      for (const member of data.members || []) {
+        const email = member.user?.principalName;
+        const displayName = member.user?.displayName || email;
+        const id = member.id || member.user?.id || email;
+        const license =
+          member.accessLevel?.licenseDisplayName || member.accessLevel?.accountLicenseType;
+        const avatarUrl = member.user?.imageUrl;
+
+        if (email && license) {
+          users.push({
+            id,
+            displayName,
+            email,
+            license,
+            avatarUrl,
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching user entitlements:', error);
+    }
+
+    return users;
   }
 }
 
