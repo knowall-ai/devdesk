@@ -312,11 +312,9 @@ export default function HomePage() {
                         : b.name.localeCompare(a.name)
                     )
                     .map((project, index) => (
-                      <a
+                      <Link
                         key={project.id}
-                        href={project.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
+                        href={`/projects/${project.id}`}
                         className="flex items-center justify-between rounded-lg p-3 transition-colors hover:bg-[var(--surface-hover)]"
                       >
                         <div className="flex items-center gap-3">
@@ -328,7 +326,7 @@ export default function HomePage() {
                           <span style={{ color: 'var(--text-primary)' }}>{project.name}</span>
                         </div>
                         <ArrowRight size={16} style={{ color: 'var(--text-muted)' }} />
-                      </a>
+                      </Link>
                     ))
                 )}
                 {projects.length > 0 &&
