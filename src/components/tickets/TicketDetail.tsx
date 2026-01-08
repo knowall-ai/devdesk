@@ -336,7 +336,9 @@ export default function TicketDetail({
                     Unassigned
                   </span>
                 )}
-                {onAssigneeChange && <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />}
+                {onAssigneeChange && (
+                  <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />
+                )}
               </button>
 
               {/* Assignee dropdown */}
@@ -449,7 +451,9 @@ export default function TicketDetail({
                 ) : (
                   <PriorityIndicator priority={ticket.priority} showLabel />
                 )}
-                {onPriorityChange && <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />}
+                {onPriorityChange && (
+                  <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />
+                )}
               </button>
 
               {/* Priority dropdown */}

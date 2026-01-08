@@ -67,7 +67,9 @@ export default function ProjectDetailPage() {
   const fetchProjectTickets = async () => {
     setLoadingTickets(true);
     try {
-      const response = await fetch(`/api/devops/tickets?organization=${encodeURIComponent(projectId)}`);
+      const response = await fetch(
+        `/api/devops/tickets?organization=${encodeURIComponent(projectId)}`
+      );
       if (response.ok) {
         const data = await response.json();
         setTickets(data.tickets || []);
@@ -129,9 +131,7 @@ export default function ProjectDetailPage() {
           <h1 className="mb-2 text-2xl font-bold" style={{ color: 'var(--text-primary)' }}>
             {project.name}
           </h1>
-          {project.domain && (
-            <p style={{ color: 'var(--text-secondary)' }}>{project.domain}</p>
-          )}
+          {project.domain && <p style={{ color: 'var(--text-secondary)' }}>{project.domain}</p>}
         </div>
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -208,7 +208,10 @@ export default function ProjectDetailPage() {
             {/* How to set Domain/SLA info */}
             <div
               className="mt-4 rounded-md p-3"
-              style={{ backgroundColor: 'rgba(34, 197, 94, 0.1)', border: '1px solid rgba(34, 197, 94, 0.2)' }}
+              style={{
+                backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                border: '1px solid rgba(34, 197, 94, 0.2)',
+              }}
             >
               <div className="flex items-start gap-2">
                 <Info size={16} className="mt-0.5 shrink-0" style={{ color: 'var(--primary)' }} />
@@ -217,8 +220,8 @@ export default function ProjectDetailPage() {
                     Setting Domain &amp; SLA
                   </p>
                   <p className="mb-2">
-                    To set the domain and SLA for this project, edit the project description in Azure
-                    DevOps with the following format:
+                    To set the domain and SLA for this project, edit the project description in
+                    Azure DevOps with the following format:
                   </p>
                   <code
                     className="block rounded p-2 text-xs"
