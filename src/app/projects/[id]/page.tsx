@@ -13,6 +13,8 @@ import { useOrganization } from '@/components/providers/OrganizationProvider';
 
 interface ProjectWithSLA extends Organization {
   sla?: SLALevel;
+  processTemplate?: string;
+  isTemplateSupported?: boolean;
 }
 
 export default function ProjectDetailPage() {
@@ -189,6 +191,39 @@ export default function ProjectDetailPage() {
               <div>
                 <span style={{ color: 'var(--text-muted)' }}>DevOps Project:</span>
                 <p style={{ color: 'var(--text-primary)' }}>{project.devOpsProject}</p>
+              </div>
+              <div>
+                <span style={{ color: 'var(--text-muted)' }}>Process Template:</span>
+                <p style={{ color: 'var(--text-primary)' }}>
+                  {project.processTemplate ? (
+                    <span className="flex items-center gap-2">
+                      <span>{project.processTemplate}</span>
+                      {project.isTemplateSupported ? (
+                        <span
+                          className="rounded px-1.5 py-0.5 text-xs font-medium"
+                          style={{
+                            backgroundColor: 'rgba(34, 197, 94, 0.15)',
+                            color: 'var(--primary)',
+                          }}
+                        >
+                          Supported
+                        </span>
+                      ) : (
+                        <span
+                          className="rounded px-1.5 py-0.5 text-xs font-medium"
+                          style={{
+                            backgroundColor: 'rgba(234, 179, 8, 0.2)',
+                            color: '#eab308',
+                          }}
+                        >
+                          Unsupported
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    '-'
+                  )}
+                </p>
               </div>
               <div>
                 <span style={{ color: 'var(--text-muted)' }}>Last updated:</span>
