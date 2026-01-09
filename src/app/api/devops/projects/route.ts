@@ -1,7 +1,9 @@
-import { NextResponse } from 'next/server';
+import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import type { Organization, SLALevel } from '@/types';
+import { isTemplateSupported, getTemplateConfig } from '@/config/process-templates';
+import type { ProcessTemplateConfig } from '@/config/process-templates';
 
 interface DevOpsProjectWithDescription {
   id: string;
@@ -10,6 +12,13 @@ interface DevOpsProjectWithDescription {
   url: string;
   state: string;
   lastUpdateTime?: string;
+}
+
+interface ProjectProcess {
+  projectId: string;
+  processTemplate: string;
+  isSupported: boolean;
+  config?: ProcessTemplateConfig;
 }
 
 // Parse email domains from description (format: "Email: domain1.com, domain2.com")
@@ -36,7 +45,110 @@ function parseSLA(description?: string): SLALevel | undefined {
   return undefined;
 }
 
-export async function GET() {
+// Cache for process ID to name mapping (per organization)
+const processNameCache = new Map<string, Map<string, string>>();
+
+// Fetch all processes for an organization and cache the ID->name mapping
+async function fetchProcesses(baseUrl: string, accessToken: string): Promise<Map<string, string>> {
+  const cacheKey = baseUrl;
+  if (processNameCache.has(cacheKey)) {
+    return processNameCache.get(cacheKey)!;
+  }
+
+  const processMap = new Map<string, string>();
+  try {
+    // Use the Work Processes API to get all available processes
+    const response = await fetch(`${baseUrl}/_apis/work/processes?api-version=7.1`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      for (const process of data.value || []) {
+        if (process.typeId && process.name) {
+          processMap.set(process.typeId, process.name);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to fetch processes:', error);
+  }
+
+  processNameCache.set(cacheKey, processMap);
+  return processMap;
+}
+
+// Fetch process template for a project
+async function fetchProjectProcess(
+  baseUrl: string,
+  projectId: string,
+  accessToken: string,
+  processMap: Map<string, string>
+): Promise<ProjectProcess> {
+  try {
+    // Get project properties which includes process template info
+    const propsResponse = await fetch(
+      `${baseUrl}/_apis/projects/${projectId}/properties?api-version=7.1-preview.1`,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (!propsResponse.ok) {
+      return {
+        projectId,
+        processTemplate: 'Unknown',
+        isSupported: false,
+      };
+    }
+
+    const propsData = await propsResponse.json();
+    const properties = propsData.value || [];
+
+    // Get the CurrentProcessTemplateId - this is the actual process GUID
+    const currentProcessIdProp = properties.find(
+      (p: { name: string; value: string }) => p.name === 'System.CurrentProcessTemplateId'
+    );
+
+    let processTemplate = 'Unknown';
+
+    if (currentProcessIdProp?.value) {
+      // Look up the process name from the ID
+      processTemplate = processMap.get(currentProcessIdProp.value) || 'Unknown';
+    }
+
+    // Fallback to System.Process Template if lookup failed
+    if (processTemplate === 'Unknown') {
+      const templateNameProp = properties.find(
+        (p: { name: string; value: string }) => p.name === 'System.Process Template'
+      );
+      processTemplate = templateNameProp?.value || 'Unknown';
+    }
+
+    const supported = isTemplateSupported(processTemplate);
+
+    return {
+      projectId,
+      processTemplate,
+      isSupported: supported,
+      config: supported ? getTemplateConfig(processTemplate) : undefined,
+    };
+  } catch {
+    return {
+      projectId,
+      processTemplate: 'Unknown',
+      isSupported: false,
+    };
+  }
+}
+
+export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
 
@@ -44,7 +156,13 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const devOpsOrg = process.env.AZURE_DEVOPS_ORG || 'KnowAll';
+    // Get organization from header (client sends from localStorage selection)
+    const devOpsOrg = request.headers.get('x-devops-org');
+
+    if (!devOpsOrg) {
+      return NextResponse.json({ error: 'No organization specified' }, { status: 400 });
+    }
+
     const baseUrl = `https://dev.azure.com/${devOpsOrg}`;
 
     // Fetch projects with description expanded
@@ -62,18 +180,39 @@ export async function GET() {
     const data = await response.json();
     const devopsProjects: DevOpsProjectWithDescription[] = data.value || [];
 
-    // Transform to Organization[] format with parsed domain and SLA
-    const projects: (Organization & { sla?: SLALevel })[] = devopsProjects.map((project) => ({
-      id: project.id,
-      name: project.name,
-      domain: parseEmailDomains(project.description),
-      devOpsProject: project.name,
-      devOpsOrg,
-      tags: [],
-      sla: parseSLA(project.description),
-      createdAt: new Date(), // DevOps doesn't expose project creation date
-      updatedAt: project.lastUpdateTime ? new Date(project.lastUpdateTime) : new Date(),
-    }));
+    // First fetch all available processes to get ID->name mapping
+    const processMap = await fetchProcesses(baseUrl, session.accessToken!);
+
+    // Fetch process template info for all projects in parallel
+    const processInfoPromises = devopsProjects.map((project) =>
+      fetchProjectProcess(baseUrl, project.id, session.accessToken!, processMap)
+    );
+    const processInfos = await Promise.all(processInfoPromises);
+
+    // Create a map for quick lookup
+    const processInfoMap = new Map(processInfos.map((p) => [p.projectId, p]));
+
+    // Transform to Organization[] format with parsed domain, SLA, and process template
+    const projects: (Organization & {
+      sla?: SLALevel;
+      processTemplate?: string;
+      isTemplateSupported?: boolean;
+    })[] = devopsProjects.map((project) => {
+      const processInfo = processInfoMap.get(project.id);
+      return {
+        id: project.id,
+        name: project.name,
+        domain: parseEmailDomains(project.description),
+        devOpsProject: project.name,
+        devOpsOrg,
+        tags: [],
+        sla: parseSLA(project.description),
+        processTemplate: processInfo?.processTemplate,
+        isTemplateSupported: processInfo?.isSupported ?? false,
+        createdAt: new Date(), // DevOps doesn't expose project creation date
+        updatedAt: project.lastUpdateTime ? new Date(project.lastUpdateTime) : new Date(),
+      };
+    });
 
     return NextResponse.json({
       projects,

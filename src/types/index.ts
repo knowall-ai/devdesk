@@ -26,6 +26,8 @@ export interface Organization {
   tags: string[];
   createdAt: Date;
   updatedAt: Date;
+  processTemplate?: string; // Azure DevOps process template (e.g., "T-Minus-15", "Basic")
+  isTemplateSupported?: boolean; // Whether this template has a config in DevDesk
 }
 
 export interface Customer {
@@ -154,6 +156,13 @@ export interface DevOpsProject {
   description?: string;
   url: string;
   state: string;
+}
+
+// Azure DevOps Organization (account-level, contains projects)
+export interface DevOpsOrganization {
+  accountId: string;
+  accountName: string;
+  accountUri: string;
 }
 
 export interface EmailWebhookPayload {

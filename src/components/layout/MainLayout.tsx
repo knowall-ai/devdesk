@@ -5,6 +5,7 @@ import { useSession } from 'next-auth/react';
 import Sidebar from './Sidebar';
 import Header from './Header';
 import NewTicketDialog from '@/components/tickets/NewTicketDialog';
+import { useOrganization } from '@/components/providers/OrganizationProvider';
 
 interface TicketCounts {
   yourActive: number;
@@ -23,13 +24,21 @@ interface MainLayoutProps {
 
 export default function MainLayout({ children }: MainLayoutProps) {
   const { data: session } = useSession();
+  const { selectedOrganization } = useOrganization();
   const [isNewTicketOpen, setIsNewTicketOpen] = useState(false);
   const [ticketCounts, setTicketCounts] = useState<TicketCounts | undefined>();
 
   useEffect(() => {
+    // Don't fetch until we have both session and organization
+    if (!session?.accessToken || !selectedOrganization?.accountName) return;
+
     const fetchTicketCounts = async () => {
       try {
-        const response = await fetch('/api/devops/ticket-counts');
+        const response = await fetch('/api/devops/ticket-counts', {
+          headers: {
+            'x-devops-org': selectedOrganization.accountName,
+          },
+        });
         if (response.ok) {
           const counts = await response.json();
           setTicketCounts(counts);
@@ -39,10 +48,8 @@ export default function MainLayout({ children }: MainLayoutProps) {
       }
     };
 
-    if (session?.accessToken) {
-      fetchTicketCounts();
-    }
-  }, [session]);
+    fetchTicketCounts();
+  }, [session, selectedOrganization]);
 
   return (
     <div className="flex h-screen overflow-hidden">

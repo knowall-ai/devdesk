@@ -71,7 +71,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Project and title are required' }, { status: 400 });
     }
 
-    const devopsService = new AzureDevOpsService(session.accessToken);
+    // Get organization from header or use default
+    const organization = request.headers.get('x-devops-org') || undefined;
+    const devopsService = new AzureDevOpsService(session.accessToken, organization);
 
     // Create the ticket with 'ticket' tag always included
     const allTags = ['ticket', ...(tags || [])].filter(Boolean);
@@ -104,14 +106,21 @@ export async function GET(request: NextRequest) {
 
     const searchParams = request.nextUrl.searchParams;
     const view = searchParams.get('view') || 'all-unsolved';
+    // ticketsOnly defaults to true - only show work items tagged with "ticket"
+    const ticketsOnly = searchParams.get('ticketsOnly') !== 'false';
 
-    const organization = process.env.AZURE_DEVOPS_ORG || 'KnowAll';
+    // Get organization from header (client sends from localStorage selection)
+    const organization = request.headers.get('x-devops-org');
+
+    if (!organization) {
+      return NextResponse.json({ error: 'No organization specified' }, { status: 400 });
+    }
 
     // Fetch and cache state categories before getting tickets
     await fetchAndCacheStateCategories(session.accessToken, organization);
 
-    const devopsService = new AzureDevOpsService(session.accessToken);
-    const tickets = await devopsService.getAllTickets();
+    const devopsService = new AzureDevOpsService(session.accessToken, organization);
+    const tickets = await devopsService.getAllTickets(ticketsOnly);
 
     // Filter tickets based on view
     const filteredTickets = filterTicketsByView(tickets, view, session.user?.email);

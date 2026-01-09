@@ -5,19 +5,23 @@ import { useRouter, useParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { MainLayout } from '@/components/layout';
 import { LoadingSpinner } from '@/components/common';
-import { ArrowLeft, ExternalLink, Ticket, Loader2, Info } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Ticket, Loader2, Info, AlertTriangle } from 'lucide-react';
 import Link from 'next/link';
 import { format } from 'date-fns';
 import type { Organization, Ticket as TicketType, SLALevel } from '@/types';
+import { useOrganization } from '@/components/providers/OrganizationProvider';
 
 interface ProjectWithSLA extends Organization {
   sla?: SLALevel;
+  processTemplate?: string;
+  isTemplateSupported?: boolean;
 }
 
 export default function ProjectDetailPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const params = useParams();
+  const { selectedOrganization } = useOrganization();
   const [project, setProject] = useState<ProjectWithSLA | null>(null);
   const [tickets, setTickets] = useState<TicketType[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,55 +36,65 @@ export default function ProjectDetailPage() {
   }, [status, router]);
 
   useEffect(() => {
-    if (session?.accessToken && projectId) {
+    if (session?.accessToken && projectId && selectedOrganization) {
       fetchProject();
       fetchProjectTickets();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session, projectId]);
 
-  const fetchProject = async () => {
-    try {
-      const response = await fetch('/api/devops/projects');
-      if (response.ok) {
-        const data = await response.json();
-        // API returns data.projects, not data.organizations
-        const projectsList = data.projects || [];
-        const proj = projectsList.find(
-          (p: ProjectWithSLA) =>
-            p.id === projectId || p.devOpsProject === projectId || p.name === projectId
-        );
-        if (proj) {
-          setProject({
-            ...proj,
-            createdAt: new Date(proj.createdAt),
-            updatedAt: new Date(proj.updatedAt),
-          });
+    async function fetchProject() {
+      try {
+        const headers: HeadersInit = {};
+        if (selectedOrganization?.accountName) {
+          headers['x-devops-org'] = selectedOrganization.accountName;
         }
+        const response = await fetch('/api/devops/projects', { headers });
+        if (response.ok) {
+          const data = await response.json();
+          // API returns data.projects, not data.organizations
+          const projectsList = data.projects || [];
+          const proj = projectsList.find(
+            (p: ProjectWithSLA) =>
+              p.id === projectId || p.devOpsProject === projectId || p.name === projectId
+          );
+          if (proj) {
+            setProject({
+              ...proj,
+              createdAt: new Date(proj.createdAt),
+              updatedAt: new Date(proj.updatedAt),
+            });
+          } else {
+            setProject(null);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to fetch project:', error);
+      } finally {
+        setLoading(false);
       }
-    } catch (error) {
-      console.error('Failed to fetch project:', error);
-    } finally {
-      setLoading(false);
     }
-  };
 
-  const fetchProjectTickets = async () => {
-    setLoadingTickets(true);
-    try {
-      const response = await fetch(
-        `/api/devops/tickets?organization=${encodeURIComponent(projectId)}`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        setTickets(data.tickets || []);
+    async function fetchProjectTickets() {
+      setLoadingTickets(true);
+      try {
+        const headers: HeadersInit = {};
+        if (selectedOrganization?.accountName) {
+          headers['x-devops-org'] = selectedOrganization.accountName;
+        }
+        const response = await fetch(
+          `/api/devops/tickets?project=${encodeURIComponent(projectId)}`,
+          { headers }
+        );
+        if (response.ok) {
+          const data = await response.json();
+          setTickets(data.tickets || []);
+        }
+      } catch (error) {
+        console.error('Failed to fetch tickets:', error);
+      } finally {
+        setLoadingTickets(false);
       }
-    } catch (error) {
-      console.error('Failed to fetch tickets:', error);
-    } finally {
-      setLoadingTickets(false);
     }
-  };
+  }, [session, projectId, selectedOrganization]);
 
   if (status === 'loading' || loading) {
     return (
@@ -179,6 +193,39 @@ export default function ProjectDetailPage() {
                 <p style={{ color: 'var(--text-primary)' }}>{project.devOpsProject}</p>
               </div>
               <div>
+                <span style={{ color: 'var(--text-muted)' }}>Process Template:</span>
+                <p style={{ color: 'var(--text-primary)' }}>
+                  {project.processTemplate ? (
+                    <span className="flex items-center gap-2">
+                      <span>{project.processTemplate}</span>
+                      {project.isTemplateSupported ? (
+                        <span
+                          className="rounded px-1.5 py-0.5 text-xs font-medium"
+                          style={{
+                            backgroundColor: 'rgba(34, 197, 94, 0.15)',
+                            color: 'var(--primary)',
+                          }}
+                        >
+                          Supported
+                        </span>
+                      ) : (
+                        <span
+                          className="rounded px-1.5 py-0.5 text-xs font-medium"
+                          style={{
+                            backgroundColor: 'rgba(234, 179, 8, 0.2)',
+                            color: '#eab308',
+                          }}
+                        >
+                          Unsupported
+                        </span>
+                      )}
+                    </span>
+                  ) : (
+                    '-'
+                  )}
+                </p>
+              </div>
+              <div>
                 <span style={{ color: 'var(--text-muted)' }}>Last updated:</span>
                 <p style={{ color: 'var(--text-primary)' }}>
                   {project.updatedAt && !isNaN(project.updatedAt.getTime())
@@ -264,6 +311,42 @@ export default function ProjectDetailPage() {
               </div>
             </div>
             <div className="p-4">
+              {project.isTemplateSupported === false && (
+                <div
+                  className="mb-4 rounded-md p-3"
+                  style={{
+                    backgroundColor: 'rgba(234, 179, 8, 0.1)',
+                    border: '1px solid rgba(234, 179, 8, 0.3)',
+                  }}
+                >
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle
+                      size={16}
+                      className="mt-0.5 shrink-0"
+                      style={{ color: '#eab308' }}
+                    />
+                    <div className="text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      <p className="mb-1 font-medium" style={{ color: 'var(--text-primary)' }}>
+                        Unsupported Process Template
+                      </p>
+                      <p className="mb-2">
+                        This project uses the &quot;{project.processTemplate}&quot; process template
+                        which is not yet supported. Ticket display and creation may not work
+                        correctly.
+                      </p>
+                      <a
+                        href={`https://github.com/knowall-ai/devdesk/issues/new?title=${encodeURIComponent(`Support for ${project.processTemplate} process template`)}&body=${encodeURIComponent(`Please add support for the "${project.processTemplate}" process template.`)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 font-medium"
+                        style={{ color: 'var(--primary)' }}
+                      >
+                        Request support for this template <ExternalLink size={12} />
+                      </a>
+                    </div>
+                  </div>
+                </div>
+              )}
               {loadingTickets ? (
                 <LoadingSpinner size="md" message="Loading tickets..." />
               ) : tickets.length === 0 ? (
