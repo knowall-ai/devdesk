@@ -397,7 +397,7 @@ export default function TicketDetail({
                 disabled
                 className="h-4 w-4 rounded accent-[var(--primary)]"
               />
-              <span className="text-sm" style={{ color: 'var(--primary)' }}>
+              <span className="text-xs" style={{ color: 'var(--primary)' }}>
                 Public reply – all comments are visible to customers in DevOps
               </span>
             </label>
