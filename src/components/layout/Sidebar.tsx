@@ -271,7 +271,7 @@ export default function Sidebar({ ticketCounts, onNewTicket }: SidebarProps) {
       {/* Branding footer */}
       <div className="border-t p-3 text-center" style={{ borderColor: 'var(--border)' }}>
         <div className="text-xs" style={{ color: 'var(--text-muted)' }}>
-          <div>v{process.env.NEXT_PUBLIC_APP_VERSION}</div>
+          <div>v{process.env.NEXT_PUBLIC_APP_VERSION || '0.0.0'}</div>
           <div className="mt-1">
             Built by{' '}
             <a
@@ -279,6 +279,7 @@ export default function Sidebar({ ticketCounts, onNewTicket }: SidebarProps) {
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-[var(--primary)]"
+              aria-label="KnowAll AI (opens in new tab)"
             >
               KnowAll AI
             </a>
