@@ -29,15 +29,16 @@ export default function MainLayout({ children }: MainLayoutProps) {
   const [ticketCounts, setTicketCounts] = useState<TicketCounts | undefined>();
 
   useEffect(() => {
-    if (!session?.accessToken) return;
+    // Don't fetch until we have both session and organization
+    if (!session?.accessToken || !selectedOrganization?.accountName) return;
 
     const fetchTicketCounts = async () => {
       try {
-        const headers: HeadersInit = {};
-        if (selectedOrganization?.accountName) {
-          headers['x-devops-org'] = selectedOrganization.accountName;
-        }
-        const response = await fetch('/api/devops/ticket-counts', { headers });
+        const response = await fetch('/api/devops/ticket-counts', {
+          headers: {
+            'x-devops-org': selectedOrganization.accountName,
+          },
+        });
         if (response.ok) {
           const counts = await response.json();
           setTicketCounts(counts);

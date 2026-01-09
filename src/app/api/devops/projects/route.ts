@@ -45,15 +45,51 @@ function parseSLA(description?: string): SLALevel | undefined {
   return undefined;
 }
 
+// Cache for process ID to name mapping (per organization)
+const processNameCache = new Map<string, Map<string, string>>();
+
+// Fetch all processes for an organization and cache the ID->name mapping
+async function fetchProcesses(baseUrl: string, accessToken: string): Promise<Map<string, string>> {
+  const cacheKey = baseUrl;
+  if (processNameCache.has(cacheKey)) {
+    return processNameCache.get(cacheKey)!;
+  }
+
+  const processMap = new Map<string, string>();
+  try {
+    // Use the Work Processes API to get all available processes
+    const response = await fetch(`${baseUrl}/_apis/work/processes?api-version=7.1`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      for (const process of data.value || []) {
+        if (process.typeId && process.name) {
+          processMap.set(process.typeId, process.name);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Failed to fetch processes:', error);
+  }
+
+  processNameCache.set(cacheKey, processMap);
+  return processMap;
+}
+
 // Fetch process template for a project
 async function fetchProjectProcess(
   baseUrl: string,
   projectId: string,
-  accessToken: string
+  accessToken: string,
+  processMap: Map<string, string>
 ): Promise<ProjectProcess> {
   try {
     // Get project properties which includes process template info
-    // Using api-version=7.1-preview.1 as recommended by Azure DevOps docs
     const propsResponse = await fetch(
       `${baseUrl}/_apis/projects/${projectId}/properties?api-version=7.1-preview.1`,
       {
@@ -65,7 +101,6 @@ async function fetchProjectProcess(
     );
 
     if (!propsResponse.ok) {
-      // Fallback to default template if we can't fetch properties
       return {
         projectId,
         processTemplate: 'Unknown',
@@ -76,14 +111,26 @@ async function fetchProjectProcess(
     const propsData = await propsResponse.json();
     const properties = propsData.value || [];
 
-    // Look for process template name property
-    // Azure DevOps uses "System.Process Template" for the human-readable name (e.g., "Scrum", "Basic")
-    // and "System.ProcessTemplateType" for the GUID - we want the name, not the GUID
-    const templateNameProp = properties.find(
-      (p: { name: string; value: string }) => p.name === 'System.Process Template'
+    // Get the CurrentProcessTemplateId - this is the actual process GUID
+    const currentProcessIdProp = properties.find(
+      (p: { name: string; value: string }) => p.name === 'System.CurrentProcessTemplateId'
     );
 
-    const processTemplate = templateNameProp?.value || 'Unknown';
+    let processTemplate = 'Unknown';
+
+    if (currentProcessIdProp?.value) {
+      // Look up the process name from the ID
+      processTemplate = processMap.get(currentProcessIdProp.value) || 'Unknown';
+    }
+
+    // Fallback to System.Process Template if lookup failed
+    if (processTemplate === 'Unknown') {
+      const templateNameProp = properties.find(
+        (p: { name: string; value: string }) => p.name === 'System.Process Template'
+      );
+      processTemplate = templateNameProp?.value || 'Unknown';
+    }
+
     const supported = isTemplateSupported(processTemplate);
 
     return {
@@ -133,9 +180,12 @@ export async function GET(request: NextRequest) {
     const data = await response.json();
     const devopsProjects: DevOpsProjectWithDescription[] = data.value || [];
 
+    // First fetch all available processes to get ID->name mapping
+    const processMap = await fetchProcesses(baseUrl, session.accessToken!);
+
     // Fetch process template info for all projects in parallel
     const processInfoPromises = devopsProjects.map((project) =>
-      fetchProjectProcess(baseUrl, project.id, session.accessToken!)
+      fetchProjectProcess(baseUrl, project.id, session.accessToken!, processMap)
     );
     const processInfos = await Promise.all(processInfoPromises);
 
