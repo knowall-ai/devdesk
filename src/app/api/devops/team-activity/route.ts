@@ -57,16 +57,24 @@ export async function GET(request: Request) {
     const memberMap = new Map<string, User>();
     const projects = await devopsService.getProjects();
 
-    for (const project of projects) {
-      try {
-        const members = await devopsService.getTeamMembers(project.name);
-        for (const member of members) {
+    // Fetch team members from all projects in parallel for better performance
+    const memberResults = await Promise.allSettled(
+      projects.map((project) => devopsService.getTeamMembers(project.name))
+    );
+
+    for (let i = 0; i < memberResults.length; i++) {
+      const result = memberResults[i];
+      if (result.status === 'fulfilled') {
+        for (const member of result.value) {
           if (!memberMap.has(member.id)) {
             memberMap.set(member.id, member);
           }
         }
-      } catch (error) {
-        console.error(`Failed to get team members for ${project.name}:`, error);
+      } else {
+        console.error(
+          `Failed to get team members for ${projects[i].name}:`,
+          result.reason instanceof Error ? result.reason.message : result.reason
+        );
       }
     }
 

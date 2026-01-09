@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { MainLayout } from '@/components/layout';
 import { Avatar, LoadingSpinner } from '@/components/common';
-import { Users, Activity } from 'lucide-react';
+import { Users, Activity, AlertCircle } from 'lucide-react';
 import { ActivityCalendar, type Activity as CalendarActivity } from 'react-activity-calendar';
 import type { User } from '@/types';
 
@@ -20,6 +20,7 @@ export default function TeamsPage() {
   const router = useRouter();
   const [activityData, setActivityData] = useState<TeamActivityData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [selectedMember, setSelectedMember] = useState<string>('all');
 
   useEffect(() => {
@@ -30,15 +31,20 @@ export default function TeamsPage() {
 
   const fetchTeamActivity = useCallback(async () => {
     setLoading(true);
+    setError(null);
     try {
       const memberParam = selectedMember !== 'all' ? `?member=${selectedMember}` : '';
       const response = await fetch(`/api/devops/team-activity${memberParam}`);
       if (response.ok) {
         const data = await response.json();
         setActivityData(data);
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        setError(errorData.error || 'Failed to load team activity data');
       }
-    } catch (error) {
-      console.error('Failed to fetch team activity:', error);
+    } catch (err) {
+      console.error('Failed to fetch team activity:', err);
+      setError('Unable to connect to the server. Please try again.');
     } finally {
       setLoading(false);
     }
@@ -144,6 +150,28 @@ export default function TeamsPage() {
                 <div className="flex h-48 items-center justify-center">
                   <LoadingSpinner size="lg" message="Loading activity data..." />
                 </div>
+              ) : error ? (
+                <div
+                  className="flex h-48 items-center justify-center rounded-lg"
+                  style={{ backgroundColor: 'var(--surface-hover)' }}
+                >
+                  <div className="text-center">
+                    <AlertCircle
+                      size={48}
+                      style={{ color: 'var(--priority-urgent)', margin: '0 auto' }}
+                    />
+                    <p className="mt-4 text-sm" style={{ color: 'var(--text-secondary)' }}>
+                      {error}
+                    </p>
+                    <button
+                      onClick={fetchTeamActivity}
+                      className="btn-secondary mt-4"
+                      style={{ cursor: 'pointer' }}
+                    >
+                      Try again
+                    </button>
+                  </div>
+                </div>
               ) : activityData?.activities && activityData.activities.length > 0 ? (
                 <div className="overflow-x-auto">
                   <ActivityCalendar
@@ -154,12 +182,18 @@ export default function TeamsPage() {
                     fontSize={12}
                     colorScheme="dark"
                     theme={{
-                      dark: ['#1a1a1a', '#0e4429', '#006d32', '#26a641', '#39d353'],
+                      dark: [
+                        'var(--surface)',
+                        'var(--primary-dark)',
+                        'var(--primary-hover)',
+                        'var(--primary)',
+                        'var(--primary-light)',
+                      ],
                     }}
                     labels={{
                       totalCount: '{{count}} activities in {{year}}',
                     }}
-                    showWeekdayLabels={['mon', 'wed', 'fri']}
+                    showWeekdayLabels
                   />
                 </div>
               ) : (
