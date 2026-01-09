@@ -81,12 +81,15 @@ export async function GET() {
       if (ticket.status === 'Resolved' || ticket.status === 'Closed') {
         member.ticketsResolved++;
 
+        // Use resolvedAt when available for accurate resolution timing, fall back to updatedAt
+        const resolutionDate = ticket.resolvedAt ?? ticket.updatedAt;
+
         // Count this week's resolutions
-        if (ticket.updatedAt >= oneWeekAgo) {
+        if (resolutionDate >= oneWeekAgo) {
           member.weeklyResolutions++;
         }
         // Count previous week's resolutions (7-14 days ago)
-        else if (ticket.updatedAt >= twoWeeksAgo && ticket.updatedAt < oneWeekAgo) {
+        else if (resolutionDate >= twoWeeksAgo && resolutionDate < oneWeekAgo) {
           const memberEmail = member.email.toLowerCase();
           prevWeekResolutions.set(memberEmail, (prevWeekResolutions.get(memberEmail) || 0) + 1);
         }
