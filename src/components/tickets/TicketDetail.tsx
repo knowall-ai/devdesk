@@ -16,17 +16,12 @@ import {
   Zap,
 } from 'lucide-react';
 import Link from 'next/link';
-import type { Ticket, TicketComment, User, TicketPriority } from '@/types';
+import type { Ticket, TicketComment, User, TicketPriority, WorkItemState } from '@/types';
+import { ensureActiveState } from '@/types';
 import StatusBadge from '../common/StatusBadge';
 import Avatar from '../common/Avatar';
 import PriorityIndicator from '../common/PriorityIndicator';
 import ZapDialog from './ZapDialog';
-
-interface WorkItemState {
-  name: string;
-  color: string;
-  category: string;
-}
 
 interface TicketDetailProps {
   ticket: Ticket;
@@ -98,21 +93,8 @@ export default function TicketDetail({
       const response = await fetch('/api/devops/workitem-states');
       if (response.ok) {
         const data = await response.json();
-        let states = data.allStates || [];
-        // Ensure "Active" state exists
-        if (!states.some((s: WorkItemState) => s.name === 'Active')) {
-          const newIndex = states.findIndex((s: WorkItemState) => s.name === 'New');
-          const activeState: WorkItemState = {
-            name: 'Active',
-            color: '007acc',
-            category: 'InProgress',
-          };
-          if (newIndex >= 0) {
-            states = [...states.slice(0, newIndex + 1), activeState, ...states.slice(newIndex + 1)];
-          } else {
-            states = [activeState, ...states];
-          }
-        }
+        // Use shared utility to ensure "Active" state exists
+        const states = ensureActiveState(data.allStates || []);
         setAvailableStates(states);
       }
     } catch (err) {

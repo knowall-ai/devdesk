@@ -16,17 +16,12 @@ import {
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import KanbanColumn from './KanbanColumn';
 import KanbanCard from './KanbanCard';
-import type { Ticket } from '@/types';
+import type { Ticket, WorkItemState } from '@/types';
+import { ensureActiveState } from '@/types';
 
 interface KanbanBoardProps {
   tickets: Ticket[];
   onTicketStateChange?: (ticketId: number, newState: string) => Promise<void>;
-}
-
-interface WorkItemState {
-  name: string;
-  color: string;
-  category: string;
 }
 
 export default function KanbanBoard({ tickets, onTicketStateChange }: KanbanBoardProps) {
@@ -44,26 +39,8 @@ export default function KanbanBoard({ tickets, onTicketStateChange }: KanbanBoar
         if (response.ok) {
           const data = await response.json();
           if (data.allStates && data.allStates.length > 0) {
-            let states = data.allStates;
-            // Ensure "Active" state exists (common in Agile process, may not be in all work item types)
-            if (!states.some((s: WorkItemState) => s.name === 'Active')) {
-              // Insert "Active" after "New" (or first InProgress state)
-              const newIndex = states.findIndex((s: WorkItemState) => s.name === 'New');
-              const activeState: WorkItemState = {
-                name: 'Active',
-                color: '007acc',
-                category: 'InProgress',
-              };
-              if (newIndex >= 0) {
-                states = [
-                  ...states.slice(0, newIndex + 1),
-                  activeState,
-                  ...states.slice(newIndex + 1),
-                ];
-              } else {
-                states = [activeState, ...states];
-              }
-            }
+            // Use shared utility to ensure "Active" state exists
+            const states = ensureActiveState(data.allStates);
             setKanbanStates(states);
           }
         }
@@ -77,7 +54,7 @@ export default function KanbanBoard({ tickets, onTicketStateChange }: KanbanBoar
   }, []);
 
   // Update local tickets when props change
-  useMemo(() => {
+  useEffect(() => {
     setLocalTickets(tickets);
   }, [tickets]);
 
