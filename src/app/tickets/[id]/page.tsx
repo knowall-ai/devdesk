@@ -36,10 +36,15 @@ export default function TicketDetailPage() {
           updatedAt: new Date(data.ticket.updatedAt),
         });
         setComments(
-          data.comments.map((c: TicketComment & { createdAt: string }) => ({
-            ...c,
-            createdAt: new Date(c.createdAt),
-          }))
+          data.comments
+            .map((c: TicketComment & { createdAt: string }) => ({
+              ...c,
+              createdAt: new Date(c.createdAt),
+            }))
+            // Sort by date ascending (oldest first, newest at bottom)
+            .sort(
+              (a: TicketComment, b: TicketComment) => a.createdAt.getTime() - b.createdAt.getTime()
+            )
         );
       } else {
         router.push('/tickets');
@@ -90,6 +95,46 @@ export default function TicketDetailPage() {
     }
   };
 
+  const handleAssigneeChange = async (assigneeId: string | null) => {
+    if (!ticket) return;
+    try {
+      const response = await fetch(`/api/devops/tickets/${ticketId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assignee: assigneeId,
+          project: ticket.project,
+        }),
+      });
+
+      if (response.ok) {
+        await fetchTicket(); // Refresh ticket
+      }
+    } catch (error) {
+      console.error('Failed to update assignee:', error);
+    }
+  };
+
+  const handlePriorityChange = async (priority: number) => {
+    if (!ticket) return;
+    try {
+      const response = await fetch(`/api/devops/tickets/${ticketId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          priority,
+          project: ticket.project,
+        }),
+      });
+
+      if (response.ok) {
+        await fetchTicket(); // Refresh ticket
+      }
+    } catch (error) {
+      console.error('Failed to update priority:', error);
+    }
+  };
+
   if (status === 'loading' || loading) {
     return (
       <MainLayout>
@@ -111,6 +156,8 @@ export default function TicketDetailPage() {
         comments={comments}
         onAddComment={handleAddComment}
         onStatusChange={handleStatusChange}
+        onAssigneeChange={handleAssigneeChange}
+        onPriorityChange={handlePriorityChange}
       />
     </MainLayout>
   );

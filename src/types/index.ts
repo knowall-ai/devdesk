@@ -38,6 +38,7 @@ export interface Customer {
   tags: string[];
   avatarUrl?: string;
   lastUpdated?: Date;
+  license?: string;
 }
 
 export type TicketStatus = 'New' | 'Open' | 'In Progress' | 'Pending' | 'Resolved' | 'Closed';
@@ -50,7 +51,7 @@ export interface Ticket {
   title: string;
   description: string;
   status: TicketStatus;
-  priority: TicketPriority;
+  priority?: TicketPriority;
   requester: Customer;
   assignee?: User;
   organization?: Organization;
@@ -190,3 +191,23 @@ export interface TeamStats {
   inProgressTickets: number;
   needsAttention: number;
 }
+
+// Zap (Lightning Network) types
+export interface ZapConfig {
+  lightningAddress: string;
+  presetAmounts: number[]; // in satoshis
+  customAmountsEnabled: boolean;
+}
+
+export interface ZapPayment {
+  id: string;
+  ticketId: number;
+  agentId: string;
+  agentName: string;
+  agentLightningAddress: string;
+  amount: number; // in satoshis
+  timestamp: Date;
+  message?: string;
+}
+
+export const DEFAULT_ZAP_PRESETS = [100, 500, 1000, 5000] as const;
