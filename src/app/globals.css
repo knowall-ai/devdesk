@@ -419,6 +419,16 @@ body {
   width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
+  touch-action: pan-y pan-x;
+}
+
+.activity-calendar-wrapper svg {
+  touch-action: pan-y;
+  pointer-events: none;
+}
+
+.activity-calendar-wrapper svg rect {
+  pointer-events: auto;
 }
 
 @media (max-width: 640px) {
