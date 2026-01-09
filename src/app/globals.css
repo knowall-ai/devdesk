@@ -167,8 +167,13 @@ body {
     @apply rounded-md px-4 py-2 font-medium transition-colors;
   }
 
-  .btn-primary:hover {
+  .btn-primary:hover:not(:disabled) {
     background: var(--primary-hover);
+  }
+
+  .btn-primary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .btn-secondary {
@@ -406,5 +411,34 @@ body {
 
   .kanban-card {
     padding: 0.625rem;
+  }
+}
+
+/* Activity Calendar responsive styles */
+.activity-calendar-wrapper {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y pan-x;
+}
+
+.activity-calendar-wrapper svg {
+  touch-action: pan-y;
+  pointer-events: none;
+}
+
+.activity-calendar-wrapper svg rect {
+  pointer-events: auto;
+}
+
+@media (max-width: 640px) {
+  /* Hide weekday labels (Mon, Wed, Fri) on mobile */
+  .activity-calendar-wrapper svg g[transform] > text {
+    display: none;
+  }
+
+  /* Show only first and last month labels - hide middle ones */
+  .activity-calendar-wrapper svg > text:not(:first-of-type):not(:last-of-type) {
+    display: none;
   }
 }

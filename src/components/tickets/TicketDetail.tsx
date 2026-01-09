@@ -14,6 +14,8 @@ import {
   Loader2,
   User as UserIcon,
   Zap,
+  Info,
+  X,
 } from 'lucide-react';
 import Link from 'next/link';
 import type { Ticket, TicketComment, User, TicketPriority, WorkItemState } from '@/types';
@@ -50,6 +52,7 @@ export default function TicketDetail({
   const [newComment, setNewComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isZapDialogOpen, setIsZapDialogOpen] = useState(false);
+  const [isDetailsSidebarOpen, setIsDetailsSidebarOpen] = useState(false);
 
   // State editing
   const [isStateDropdownOpen, setIsStateDropdownOpen] = useState(false);
@@ -213,12 +216,22 @@ export default function TicketDetail({
             <h1 className="flex-1 text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
               {ticket.title}
             </h1>
+            {/* Mobile details button */}
+            <button
+              onClick={() => setIsDetailsSidebarOpen(true)}
+              className="flex items-center gap-1 rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-[var(--surface-hover)] lg:hidden"
+              style={{ color: 'var(--text-secondary)' }}
+              aria-label="Show ticket details"
+            >
+              <Info size={16} />
+              Details
+            </button>
             {/* Zap button moved to comment area */}
             <a
               href={ticket.devOpsUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+              className="hidden items-center gap-1 rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-[var(--surface-hover)] sm:flex"
               style={{ color: 'var(--primary)' }}
             >
               View in DevOps <ExternalLink size={14} />
@@ -378,12 +391,17 @@ export default function TicketDetail({
           style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}
         >
           <div className="mb-3 flex items-center gap-2">
-            <span className="rounded-md bg-[var(--primary)] px-3 py-1.5 text-sm text-white">
-              Public reply
-            </span>
-            <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
-              All comments are visible to customers in DevOps
-            </span>
+            <label className="flex cursor-not-allowed items-center gap-2">
+              <input
+                type="checkbox"
+                checked
+                disabled
+                className="h-4 w-4 rounded accent-[var(--primary)]"
+              />
+              <span className="text-xs" style={{ color: 'var(--primary)' }}>
+                Public reply – all comments are visible to customers in DevOps
+              </span>
+            </label>
           </div>
 
           <div className="relative">
@@ -425,15 +443,36 @@ export default function TicketDetail({
         </div>
       </div>
 
+      {/* Mobile sidebar overlay */}
+      {isDetailsSidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 lg:hidden"
+          onClick={() => setIsDetailsSidebarOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
       {/* Sidebar */}
       <div
-        className="w-80 overflow-auto border-l"
+        className={`fixed inset-y-0 right-0 z-50 w-80 transform overflow-auto border-l transition-transform duration-300 ease-in-out ${
+          isDetailsSidebarOpen ? 'translate-x-0' : 'translate-x-full'
+        } lg:relative lg:z-auto lg:translate-x-0`}
         style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}
       >
         <div className="p-4">
-          <h3 className="mb-4 text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-            Ticket Details
-          </h3>
+          <div className="mb-4 flex items-center justify-between">
+            <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
+              Ticket Details
+            </h3>
+            <button
+              onClick={() => setIsDetailsSidebarOpen(false)}
+              className="rounded-md p-1 transition-colors hover:bg-[var(--surface-hover)] lg:hidden"
+              style={{ color: 'var(--text-muted)' }}
+              aria-label="Close details"
+            >
+              <X size={20} />
+            </button>
+          </div>
 
           <div className="space-y-4">
             {/* Assignee - Editable */}

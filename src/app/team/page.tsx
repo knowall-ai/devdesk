@@ -48,6 +48,15 @@ export default function TeamPage() {
   const [error, setError] = useState<string | null>(null);
   const [sortColumn, setSortColumn] = useState<SortColumn>('resolved');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [isMobile, setIsMobile] = useState(false);
+
+  // Detect mobile screen size
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth < 640);
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -105,6 +114,28 @@ export default function TeamPage() {
   const maxResolved = React.useMemo(() => {
     return teamData?.members ? Math.max(...teamData.members.map((m) => m.ticketsResolved), 1) : 1;
   }, [teamData?.members]);
+
+  // Filter activity data - show only last 3 months on mobile
+  const filteredActivityData = React.useMemo(() => {
+    if (!activityData?.activities) return null;
+
+    if (isMobile) {
+      const threeMonthsAgo = new Date();
+      threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+      const cutoffDate = threeMonthsAgo.toISOString().split('T')[0];
+
+      const filteredActivities = activityData.activities.filter(
+        (activity) => activity.date >= cutoffDate
+      );
+
+      return {
+        activities: filteredActivities,
+        totalActivities: filteredActivities.reduce((sum, a) => sum + a.count, 0),
+      };
+    }
+
+    return activityData;
+  }, [activityData, isMobile]);
 
   // Sort members (must be before conditional returns)
   const sortedMembers = React.useMemo(() => {
@@ -243,8 +274,9 @@ export default function TeamPage() {
                 <h2 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
                   Team Activity
                 </h2>
-                <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                  {activityData?.totalActivities || 0} activities in the last year
+                <p className="hidden text-sm sm:block" style={{ color: 'var(--text-muted)' }}>
+                  {filteredActivityData?.totalActivities || 0} activities in{' '}
+                  {new Date().getFullYear()}
                 </p>
               </div>
               <div
@@ -260,45 +292,38 @@ export default function TeamPage() {
               <div className="flex h-32 items-center justify-center">
                 <LoadingSpinner size="md" message="Loading activity data..." />
               </div>
-            ) : activityData?.activities && activityData.activities.length > 0 ? (
-              <div
-                className="activity-calendar-wrapper"
-                style={{
-                  display: 'flex',
-                  justifyContent: 'center',
-                  width: '100%',
-                  transform: 'scaleX(1.15)',
-                  transformOrigin: 'center',
-                }}
-              >
-                <ActivityCalendar
-                  data={activityData.activities}
-                  blockSize={12}
-                  blockMargin={4}
-                  blockRadius={3}
-                  fontSize={12}
-                  colorScheme="dark"
-                  theme={{
-                    dark: [
-                      'var(--surface)',
-                      'var(--primary-dark)',
-                      'var(--primary-hover)',
-                      'var(--primary)',
-                      'var(--primary-light)',
-                    ],
-                  }}
-                  labels={{
-                    totalCount: '{{count}} activities in {{year}}',
-                  }}
-                  showWeekdayLabels
-                  renderBlock={(block, activity) =>
-                    React.cloneElement(block, {
-                      'data-tooltip-id': 'activity-tooltip',
-                      'data-tooltip-content': `${activity.count} activities on ${activity.date}`,
-                    })
-                  }
-                />
-                <Tooltip id="activity-tooltip" />
+            ) : filteredActivityData?.activities && filteredActivityData.activities.length > 0 ? (
+              <div className="activity-calendar-wrapper w-full">
+                <div className="flex min-w-0 justify-center">
+                  <ActivityCalendar
+                    data={filteredActivityData.activities}
+                    blockSize={12}
+                    blockMargin={4}
+                    blockRadius={3}
+                    fontSize={12}
+                    colorScheme="dark"
+                    theme={{
+                      dark: [
+                        'var(--surface)',
+                        'var(--primary-dark)',
+                        'var(--primary-hover)',
+                        'var(--primary)',
+                        'var(--primary-light)',
+                      ],
+                    }}
+                    labels={{
+                      totalCount: isMobile ? ' ' : '{{count}} activities in {{year}}',
+                    }}
+                    showWeekdayLabels
+                    renderBlock={(block, activity) =>
+                      React.cloneElement(block, {
+                        'data-tooltip-id': 'activity-tooltip',
+                        'data-tooltip-content': `${activity.count} activities on ${activity.date}`,
+                      })
+                    }
+                  />
+                  <Tooltip id="activity-tooltip" />
+                </div>
               </div>
             ) : (
               <div
@@ -361,7 +386,7 @@ export default function TeamPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full" aria-label="Team members performance metrics">
+              <table className="w-full table-fixed" aria-label="Team members performance metrics">
                 <thead>
                   <tr className="table-header">
                     <th
@@ -372,7 +397,7 @@ export default function TeamPage() {
                       <SortIcon column="name" />
                     </th>
                     <th
-                      className="w-64 cursor-pointer px-4 py-3 text-left text-xs font-medium tracking-wider uppercase hover:bg-[var(--surface-hover)]"
+                      className="hidden w-64 cursor-pointer px-4 py-3 text-left text-xs font-medium tracking-wider uppercase hover:bg-[var(--surface-hover)] md:table-cell"
                       onClick={() => handleSort('resolved')}
                     >
                       <div className="flex items-center gap-2">
@@ -393,21 +418,21 @@ export default function TeamPage() {
                       </div>
                     </th>
                     <th
-                      className="cursor-pointer px-4 py-3 text-center text-xs font-medium tracking-wider uppercase hover:bg-[var(--surface-hover)]"
+                      className="hidden cursor-pointer px-4 py-3 text-center text-xs font-medium tracking-wider uppercase hover:bg-[var(--surface-hover)] md:table-cell"
                       onClick={() => handleSort('weeklyResolved')}
                     >
                       Weekly Resolved
                       <SortIcon column="weeklyResolved" />
                     </th>
                     <th
-                      className="cursor-pointer px-4 py-3 text-center text-xs font-medium tracking-wider uppercase hover:bg-[var(--surface-hover)]"
+                      className="hidden cursor-pointer px-4 py-3 text-center text-xs font-medium tracking-wider uppercase hover:bg-[var(--surface-hover)] md:table-cell"
                       onClick={() => handleSort('avgResponse')}
                     >
                       Avg Response
                       <SortIcon column="avgResponse" />
                     </th>
                     <th
-                      className="cursor-pointer px-4 py-3 text-center text-xs font-medium tracking-wider uppercase hover:bg-[var(--surface-hover)]"
+                      className="hidden cursor-pointer px-4 py-3 text-center text-xs font-medium tracking-wider uppercase hover:bg-[var(--surface-hover)] md:table-cell"
                       onClick={() => handleSort('avgResolution')}
                     >
                       Avg Resolution
@@ -429,19 +454,25 @@ export default function TeamPage() {
                     return (
                       <tr key={member.id} className="table-row">
                         <td className="px-4 py-4">
-                          <div className="flex items-center gap-3">
+                          <div className="flex min-w-0 items-center gap-3">
                             <Avatar name={member.displayName} size="md" image={member.avatarUrl} />
-                            <div>
-                              <p className="font-medium" style={{ color: 'var(--text-primary)' }}>
+                            <div className="min-w-0 flex-1">
+                              <p
+                                className="truncate font-medium"
+                                style={{ color: 'var(--text-primary)' }}
+                              >
                                 {member.displayName}
                               </p>
-                              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                              <p
+                                className="truncate text-sm"
+                                style={{ color: 'var(--text-muted)' }}
+                              >
                                 {member.email}
                               </p>
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 py-4">
+                        <td className="hidden px-4 py-4 md:table-cell">
                           <div className="space-y-1">
                             {/* Assigned bar */}
                             <div
@@ -479,7 +510,7 @@ export default function TeamPage() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-4 py-4 text-center">
+                        <td className="hidden px-4 py-4 text-center md:table-cell">
                           <div className="flex items-center justify-center gap-2">
                             <TrendingUp size={16} style={{ color: 'var(--status-resolved)' }} />
                             <span style={{ color: 'var(--text-primary)' }}>
@@ -499,12 +530,12 @@ export default function TeamPage() {
                             )}
                           </div>
                         </td>
-                        <td className="px-4 py-4 text-center">
+                        <td className="hidden px-4 py-4 text-center md:table-cell">
                           <span style={{ color: 'var(--text-secondary)' }}>
                             {member.avgResponseTime}
                           </span>
                         </td>
-                        <td className="px-4 py-4 text-center">
+                        <td className="hidden px-4 py-4 text-center md:table-cell">
                           <span style={{ color: 'var(--text-secondary)' }}>
                             {member.avgResolutionTime}
                           </span>
