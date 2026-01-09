@@ -177,7 +177,9 @@ export interface TeamMember extends User {
   ticketsAssigned: number;
   ticketsResolved: number;
   weeklyResolutions: number;
+  weeklyTrend?: string; // "+N" or "-N" compared to previous week
   avgResponseTime: string;
+  avgResolutionTime: string;
   pendingTickets: number;
 }
 

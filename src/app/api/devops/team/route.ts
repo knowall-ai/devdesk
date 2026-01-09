@@ -12,46 +12,61 @@ export async function GET() {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    // Get the current user's email domain to filter internal users
+    const userEmail = session.user?.email || '';
+    const internalDomain = userEmail.includes('@') ? userEmail.split('@')[1].toLowerCase() : '';
+
     const devopsService = new AzureDevOpsService(session.accessToken);
 
-    // Get all projects and team members
-    const projects = await devopsService.getProjects();
+    // Get all users from the organization
+    const orgUsers = await devopsService.getOrganizationUsers();
     const allMembers = new Map<string, TeamMember>();
 
-    // Get team members from all projects
-    for (const project of projects) {
-      try {
-        const members = await devopsService.getTeamMembers(project.name);
-        for (const member of members) {
-          if (!allMembers.has(member.id)) {
-            allMembers.set(member.id, {
-              ...member,
-              status: 'On Track',
-              ticketsAssigned: 0,
-              ticketsResolved: 0,
-              weeklyResolutions: 0,
-              avgResponseTime: '-',
-              pendingTickets: 0,
-            });
-          }
-        }
-      } catch (error) {
-        console.error(`Failed to fetch team members from ${project.name}:`, error);
+    // Filter to only include users from the same domain as the current user
+    for (const member of orgUsers) {
+      if (!isInternalUser(member.email, internalDomain)) {
+        continue;
+      }
+      if (!allMembers.has(member.id)) {
+        allMembers.set(member.id, {
+          ...member,
+          status: 'On Track',
+          ticketsAssigned: 0,
+          ticketsResolved: 0,
+          weeklyResolutions: 0,
+          avgResponseTime: '-',
+          avgResolutionTime: '-',
+          pendingTickets: 0,
+        });
       }
     }
 
     // Get all tickets to calculate metrics
     const tickets = await devopsService.getAllTickets();
-    const oneWeekAgo = new Date();
+    const now = new Date();
+    const oneWeekAgo = new Date(now);
     oneWeekAgo.setDate(oneWeekAgo.getDate() - 7);
+    const twoWeeksAgo = new Date(now);
+    twoWeeksAgo.setDate(twoWeeksAgo.getDate() - 14);
 
     const unsolvedStatuses: TicketStatus[] = ['New', 'Open', 'In Progress', 'Pending'];
 
+    // Build a lookup map by email (lowercase) for matching assignees
+    const membersByEmail = new Map<string, TeamMember>();
+    for (const member of allMembers.values()) {
+      if (member.email) {
+        membersByEmail.set(member.email.toLowerCase(), member);
+      }
+    }
+
+    // Track previous week resolutions for comparison
+    const prevWeekResolutions = new Map<string, number>();
+
     // Calculate per-member metrics
     for (const ticket of tickets) {
-      if (!ticket.assignee) continue;
+      if (!ticket.assignee?.email) continue;
 
-      const member = allMembers.get(ticket.assignee.id);
+      const member = membersByEmail.get(ticket.assignee.email.toLowerCase());
       if (!member) continue;
 
       // Count assigned tickets (unsolved)
@@ -66,9 +81,44 @@ export async function GET() {
       if (ticket.status === 'Resolved' || ticket.status === 'Closed') {
         member.ticketsResolved++;
 
-        // Count weekly resolutions
+        // Count this week's resolutions
         if (ticket.updatedAt >= oneWeekAgo) {
           member.weeklyResolutions++;
+        }
+        // Count previous week's resolutions (7-14 days ago)
+        else if (ticket.updatedAt >= twoWeeksAgo && ticket.updatedAt < oneWeekAgo) {
+          const memberEmail = member.email.toLowerCase();
+          prevWeekResolutions.set(memberEmail, (prevWeekResolutions.get(memberEmail) || 0) + 1);
+        }
+      }
+    }
+
+    // Add trend indicator to weekly resolutions
+    for (const member of allMembers.values()) {
+      const prevWeek = prevWeekResolutions.get(member.email.toLowerCase()) || 0;
+      const diff = member.weeklyResolutions - prevWeek;
+      // Store as string with trend indicator
+      if (diff > 0) {
+        (member as TeamMember & { weeklyTrend?: string }).weeklyTrend = `+${diff}`;
+      } else if (diff < 0) {
+        (member as TeamMember & { weeklyTrend?: string }).weeklyTrend = `${diff}`;
+      }
+    }
+
+    // Track resolution times for calculating averages (keyed by email)
+    const memberResolutionTimes = new Map<string, number[]>();
+
+    // Calculate resolution times from resolved tickets
+    for (const ticket of tickets) {
+      if (!ticket.assignee?.email) continue;
+      if (ticket.status === 'Resolved' || ticket.status === 'Closed') {
+        if (ticket.resolvedAt) {
+          const resolutionMs = ticket.resolvedAt.getTime() - ticket.createdAt.getTime();
+          const memberEmail = ticket.assignee.email.toLowerCase();
+          if (!memberResolutionTimes.has(memberEmail)) {
+            memberResolutionTimes.set(memberEmail, []);
+          }
+          memberResolutionTimes.get(memberEmail)!.push(resolutionMs);
         }
       }
     }
@@ -77,6 +127,9 @@ export async function GET() {
     const teamMembers = Array.from(allMembers.values()).map((member) => {
       member.status = calculateMemberStatus(member);
       member.avgResponseTime = calculateAvgResponseTime(member);
+      member.avgResolutionTime = calculateAvgResolutionTime(
+        memberResolutionTimes.get(member.email.toLowerCase())
+      );
       return member;
     });
 
@@ -121,6 +174,30 @@ function calculateAvgResponseTime(member: TeamMember): string {
   return '< 2 hours';
 }
 
+function calculateAvgResolutionTime(resolutionTimesMs: number[] | undefined): string {
+  if (!resolutionTimesMs || resolutionTimesMs.length === 0) {
+    return '-';
+  }
+
+  const avgMs = resolutionTimesMs.reduce((sum, t) => sum + t, 0) / resolutionTimesMs.length;
+  const avgHours = avgMs / (1000 * 60 * 60);
+  const avgDays = avgHours / 24;
+
+  if (avgDays >= 7) {
+    const weeks = Math.round(avgDays / 7);
+    return `${weeks}w`;
+  }
+  if (avgDays >= 1) {
+    const days = Math.round(avgDays);
+    return `${days}d`;
+  }
+  if (avgHours >= 1) {
+    const hours = Math.round(avgHours);
+    return `${hours}h`;
+  }
+  return '< 1h';
+}
+
 function calculateNeedsAttention(tickets: Ticket[]): number {
   const threeDaysAgo = new Date();
   threeDaysAgo.setDate(threeDaysAgo.getDate() - 3);
@@ -139,4 +216,11 @@ function calculateNeedsAttention(tickets: Ticket[]): number {
     }
     return false;
   }).length;
+}
+
+function isInternalUser(email: string, internalDomain: string): boolean {
+  if (!email || !internalDomain) return false;
+  // Check if the email belongs to the same domain as the current user
+  const memberDomain = email.includes('@') ? email.split('@')[1].toLowerCase() : '';
+  return memberDomain === internalDomain;
 }
