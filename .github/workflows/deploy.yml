@@ -1,14 +1,15 @@
 name: Deploy to Azure App Service
 
 on:
+  # Deploy when a release tag is created (e.g., v1.0.0)
   push:
-    branches:
-      - main
+    tags:
+      - 'v*'
+  # Allow manual deployment
   workflow_dispatch:
 
 env:
   AZURE_WEBAPP_NAME: devdesk-knowall
-  AZURE_WEBAPP_PACKAGE_PATH: '.'
   NODE_VERSION: '20.x'
 
 jobs:
@@ -37,16 +38,19 @@ jobs:
           NEXTAUTH_URL: https://devdesk.knowall.ai
           APP_URL: https://devdesk.knowall.ai
 
+      - name: Prepare standalone deployment
+        run: |
+          # Copy static assets to standalone folder
+          cp -r public .next/standalone/
+          cp -r .next/static .next/standalone/.next/
+          echo "Standalone deployment package prepared"
+
       - name: Upload artifact for deployment
         uses: actions/upload-artifact@v4
         with:
           name: nextjs-app
-          path: |
-            .next/
-            public/
-            package.json
-            package-lock.json
-            next.config.ts
+          include-hidden-files: true
+          path: .next/standalone
           retention-days: 1
 
   deploy:
@@ -62,20 +66,17 @@ jobs:
         with:
           name: nextjs-app
 
-      - name: Setup Node.js for production
-        uses: actions/setup-node@v4
+      - name: Login to Azure
+        uses: azure/login@v2
         with:
-          node-version: '20.x'
-
-      - name: Install production dependencies
-        run: npm ci --production
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
 
       - name: Deploy to Azure Web App
         uses: azure/webapps-deploy@v3
         with:
           app-name: ${{ env.AZURE_WEBAPP_NAME }}
-          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
-          package: ${{ env.AZURE_WEBAPP_PACKAGE_PATH }}
+          package: .
+          startup-command: 'node server.js'
 
       - name: Configure App Settings
         uses: azure/appservice-settings@v1

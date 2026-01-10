@@ -5,6 +5,16 @@ export interface User {
   displayName: string;
   email: string;
   avatarUrl?: string;
+  accessLevel?: string;
+  licenseType?: string;
+}
+
+export interface WorkItemType {
+  name: string;
+  referenceName: string;
+  description?: string;
+  color?: string;
+  icon?: string;
 }
 
 export interface Organization {
@@ -16,6 +26,8 @@ export interface Organization {
   tags: string[];
   createdAt: Date;
   updatedAt: Date;
+  processTemplate?: string; // Azure DevOps process template (e.g., "T-Minus-15", "Basic")
+  isTemplateSupported?: boolean; // Whether this template has a config in DevDesk
 }
 
 export interface Customer {
@@ -27,12 +39,38 @@ export interface Customer {
   timezone: string;
   tags: string[];
   avatarUrl?: string;
-  lastUpdated: Date;
+  lastUpdated?: Date;
+  license?: string;
 }
 
 export type TicketStatus = 'New' | 'Open' | 'In Progress' | 'Pending' | 'Resolved' | 'Closed';
 export type TicketPriority = 'Low' | 'Normal' | 'High' | 'Urgent';
 export type SLALevel = 'Gold' | 'Silver' | 'Bronze';
+
+// Azure DevOps work item state
+export interface WorkItemState {
+  name: string;
+  color: string;
+  category: string;
+}
+
+// Utility function to ensure "Active" state exists in states array
+export function ensureActiveState(states: WorkItemState[]): WorkItemState[] {
+  if (states.some((s) => s.name === 'Active')) {
+    return states;
+  }
+  // Insert "Active" after "New" (or at beginning if no "New" state)
+  const newIndex = states.findIndex((s) => s.name === 'New');
+  const activeState: WorkItemState = {
+    name: 'Active',
+    color: '007acc',
+    category: 'InProgress',
+  };
+  if (newIndex >= 0) {
+    return [...states.slice(0, newIndex + 1), activeState, ...states.slice(newIndex + 1)];
+  }
+  return [activeState, ...states];
+}
 
 export interface Ticket {
   id: number;
@@ -40,7 +78,8 @@ export interface Ticket {
   title: string;
   description: string;
   status: TicketStatus;
-  priority: TicketPriority;
+  devOpsState: string; // Original Azure DevOps state (e.g., 'New', 'Approved', 'To Do', etc.)
+  priority?: TicketPriority;
   requester: Customer;
   assignee?: User;
   organization?: Organization;
@@ -119,6 +158,13 @@ export interface DevOpsProject {
   state: string;
 }
 
+// Azure DevOps Organization (account-level, contains projects)
+export interface DevOpsOrganization {
+  accountId: string;
+  accountName: string;
+  accountUri: string;
+}
+
 export interface EmailWebhookPayload {
   from: string;
   to: string;
@@ -192,3 +238,46 @@ export interface MonthlyCheckpointStats {
 }
 
 export type TicketType = 'Bug' | 'Feature';
+
+// Team member with performance metrics
+export type TeamMemberStatus = 'On Track' | 'Behind' | 'Needs Attention';
+
+export interface TeamMember extends User {
+  role?: string;
+  status: TeamMemberStatus;
+  ticketsAssigned: number;
+  ticketsResolved: number;
+  weeklyResolutions: number;
+  weeklyTrend?: string; // "+N" or "-N" compared to previous week
+  avgResponseTime: string;
+  avgResolutionTime: string;
+  pendingTickets: number;
+}
+
+// Team summary statistics
+export interface TeamStats {
+  totalMembers: number;
+  openTickets: number;
+  inProgressTickets: number;
+  needsAttention: number;
+}
+
+// Zap (Lightning Network) types
+export interface ZapConfig {
+  lightningAddress: string;
+  presetAmounts: number[]; // in satoshis
+  customAmountsEnabled: boolean;
+}
+
+export interface ZapPayment {
+  id: string;
+  ticketId: number;
+  agentId: string;
+  agentName: string;
+  agentLightningAddress: string;
+  amount: number; // in satoshis
+  timestamp: Date;
+  message?: string;
+}
+
+export const DEFAULT_ZAP_PRESETS = [100, 500, 1000, 5000] as const;

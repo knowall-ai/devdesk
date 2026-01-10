@@ -113,6 +113,8 @@ npm run test
 
 ### Running Checks Locally
 
+**CRITICAL: ALWAYS run `npm run check` before pushing to ensure CI will pass.** Failing to do so may cause CI/CD pipeline failures.
+
 Before pushing code, run all checks to ensure CI will pass:
 
 ```bash
@@ -197,6 +199,24 @@ When making changes:
 2. Configure environment variables in App Service Configuration
 3. Deploy via GitHub Actions (see `.github/workflows/deploy.yml`)
 4. Ensure Azure AD redirect URI includes production URL
+
+### Release Process
+
+Use `npm version` to create releases - it syncs `package.json` and git tags automatically:
+
+```bash
+# On main branch, after merging PRs
+npm version patch   # Bug fixes (0.3.1 -> 0.3.2)
+npm version minor   # New features (0.3.2 -> 0.4.0)
+npm version major   # Breaking changes (0.4.0 -> 1.0.0)
+
+# Push with tags to trigger deployment
+git push --follow-tags
+```
+
+The version is displayed in the sidebar footer, read from `package.json` at build time.
+
+See `/docs/DEPLOYMENT.adoc` for full release documentation.
 
 ### Pre-deployment Checklist
 
