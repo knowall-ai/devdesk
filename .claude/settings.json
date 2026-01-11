@@ -1,4 +1,7 @@
 {
+  "enabledPlugins": {
+    "typescript-lsp@claude-plugins-official": false
+  },
   "commands": {
     "pennie": {
       "description": "Pennie the Prepper - Requirements analyst who creates GitHub issues for features"
@@ -9,8 +12,5 @@
     "archie": {
       "description": "Archie the Architect - Solution architect who reviews code for best practices"
     }
-  },
-  "enabledPlugins": {
-    "typescript-lsp@claude-plugins-official": true
   }
 }
