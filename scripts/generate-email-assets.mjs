@@ -1,7 +1,7 @@
 // One-off generator for branded email logos.
 // Run with: bun run scripts/generate-email-assets.mjs
 import sharp from 'sharp';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { mkdirSync } from 'node:fs';
 
 mkdirSync('public/email', { recursive: true });
@@ -13,16 +13,22 @@ await sharp(svg, { density: 300 })
   .toFile('public/email/zapdesk-logo.png');
 console.log('wrote public/email/zapdesk-logo.png (480x120, transparent)');
 
-// Minimal transparent placeholder so the path resolves in dev. Replace
-// before merge with the real KnowAll AI logo (PNG, transparent, ~480x120).
-await sharp({
-  create: {
-    width: 480,
-    height: 120,
-    channels: 4,
-    background: { r: 0, g: 0, b: 0, alpha: 0 },
-  },
-})
-  .png()
-  .toFile('public/email/knowall-logo.png');
-console.log('wrote public/email/knowall-logo.png (480x120 transparent placeholder)');
+// The KnowAll AI logo is committed as a real asset, not generated from SVG.
+// Only write a transparent placeholder if the file is missing, so re-running
+// this script never silently clobbers the real logo.
+const knowallPath = 'public/email/knowall-logo.png';
+if (existsSync(knowallPath)) {
+  console.log(`skipped ${knowallPath} (already exists — leaving in place)`);
+} else {
+  await sharp({
+    create: {
+      width: 480,
+      height: 120,
+      channels: 4,
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  })
+    .png()
+    .toFile(knowallPath);
+  console.log(`wrote ${knowallPath} (480x120 transparent placeholder — replace with real logo)`);
+}
