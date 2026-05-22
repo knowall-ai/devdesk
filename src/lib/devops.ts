@@ -495,15 +495,34 @@ export class AzureDevOpsService {
   // Org-level work item fetch — works without knowing the project up front.
   // Used by routes that mutate a single work item: cheaper and more reliable
   // than iterating every accessible project to find which one owns it.
-  async getWorkItemByIdOrgLevel(workItemId: number): Promise<DevOpsWorkItem | null> {
+  // Pass `fields` to request a minimal payload (e.g. ['System.TeamProject'])
+  // when the caller only needs a specific field; omit it for the full expansion.
+  async getWorkItemByIdOrgLevel(
+    workItemId: number,
+    fields?: string[]
+  ): Promise<DevOpsWorkItem | null> {
+    const selector =
+      fields && fields.length > 0
+        ? `fields=${fields.map(encodeURIComponent).join(',')}`
+        : `$expand=all`;
     const response = await fetch(
-      `${this.baseUrl}/_apis/wit/workitems/${workItemId}?$expand=all&api-version=7.1`,
+      `${this.baseUrl}/_apis/wit/workitems/${workItemId}?${selector}&api-version=7.1`,
       { headers: this.headers }
     );
     if (response.status === 404) return null;
     if (!response.ok) {
+      // Azure DevOps usually puts the actionable reason (permission scope,
+      // invalid request, etc.) in the response body — include it so the 500s
+      // surfaced by callers aren't just bare status codes.
+      let detail = '';
+      try {
+        const body = await response.text();
+        if (body) detail = `: ${body.slice(0, 500)}`;
+      } catch {
+        // ignore — body read shouldn't mask the underlying HTTP failure
+      }
       throw new Error(
-        `Failed to fetch work item ${workItemId}: ${response.status} ${response.statusText}`
+        `Failed to fetch work item ${workItemId}: ${response.status} ${response.statusText}${detail}`
       );
     }
     return response.json();

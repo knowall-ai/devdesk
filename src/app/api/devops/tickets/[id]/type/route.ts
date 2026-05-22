@@ -20,7 +20,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
 
     const body = await request.json();
-    const { type, project, additionalFields } = body;
+    const { type, additionalFields } = body;
 
     if (!type) {
       return NextResponse.json({ error: 'Type is required' }, { status: 400 });
@@ -62,33 +62,32 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       }
     }
 
-    // Resolve the project. Prefer the body field (cheap, no extra Graph call)
-    // but fall back to fetching the work item at the org level, which works
-    // regardless of which project owns it. This replaces the older
-    // findProjectForWorkItem iteration that was prone to silent 404s when one
-    // of the cached projects no longer permitted a getWorkItem call.
-    let projectName: string | undefined =
-      typeof project === 'string' && project.trim() ? project.trim() : undefined;
-
-    if (!projectName) {
-      try {
-        const orgWorkItem = await devopsService.getWorkItemByIdOrgLevel(ticketId);
-        if (!orgWorkItem) {
-          return NextResponse.json(
-            { error: `Ticket ${ticketId} not found in this organization` },
-            { status: 404 }
-          );
-        }
-        projectName = orgWorkItem.fields['System.TeamProject'] as string;
-      } catch (err) {
-        console.error(`Org-level lookup failed for ticket ${ticketId}:`, err);
+    // Resolve the owning project from the WIT API. This is the source of
+    // truth: clients may not know (or may have a stale guess of) which
+    // project owns the ticket, especially after a move. One org-level
+    // work-item fetch is cheaper and more reliable than the older
+    // findProjectForWorkItem iteration that silently swallowed per-project
+    // errors and surfaced bogus 404s.
+    let projectName: string | undefined;
+    try {
+      const orgWorkItem = await devopsService.getWorkItemByIdOrgLevel(ticketId, [
+        'System.TeamProject',
+      ]);
+      if (!orgWorkItem) {
         return NextResponse.json(
-          {
-            error: `Could not resolve the project for ticket ${ticketId}: ${err instanceof Error ? err.message : 'unknown error'}`,
-          },
-          { status: 500 }
+          { error: `Ticket ${ticketId} not found in this organization` },
+          { status: 404 }
         );
       }
+      projectName = orgWorkItem.fields['System.TeamProject'] as string;
+    } catch (err) {
+      console.error(`Org-level lookup failed for ticket ${ticketId}:`, err);
+      return NextResponse.json(
+        {
+          error: `Could not resolve the project for ticket ${ticketId}: ${err instanceof Error ? err.message : 'unknown error'}`,
+        },
+        { status: 500 }
+      );
     }
 
     if (!projectName) {
