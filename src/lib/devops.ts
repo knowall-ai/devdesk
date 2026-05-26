@@ -219,6 +219,7 @@ export function ticketToWorkItem(ticket: Ticket): WorkItem {
     resolution: ticket.resolution,
     mitigation: ticket.mitigation,
     resolvedReason: ticket.resolvedReason,
+    customerResponse: ticket.customerResponse,
     requester: ticket.requester,
     organization: ticket.organization,
   };
@@ -237,6 +238,7 @@ export function workItemToTicket(workItem: DevOpsWorkItem, organization?: Organi
     resolution: readResolutionField(fields),
     mitigation: readMitigationField(fields),
     resolvedReason: (fields['Microsoft.VSTS.Common.ResolvedReason'] as string) || undefined,
+    customerResponse: (fields['Custom.CustomerResponse'] as string) || undefined,
     status: mapStateToStatus(fields['System.State']),
     devOpsState: fields['System.State'], // Preserve original DevOps state
     workItemType: fields['System.WorkItemType'], // Azure DevOps work item type
@@ -461,6 +463,7 @@ export class AzureDevOpsService {
         'Microsoft.VSTS.Common.Resolution',
         'Microsoft.VSTS.TCM.ReproSteps',
         'Microsoft.VSTS.TCM.SystemInfo',
+        'Custom.CustomerResponse',
       ].join(',');
       const workItemsResponse = await fetch(
         `${this.baseUrl}/_apis/wit/workitems?ids=${batch.join(',')}&fields=${fields}&api-version=7.0`,
@@ -502,6 +505,28 @@ export class AzureDevOpsService {
     if (response.ok) return 'exists';
     if (response.status === 404) return 'not_found';
     return 'error';
+  }
+
+  // Org-level fetch of a work item with the minimal fields needed for search/preview.
+  // Unlike getWorkItem, no project name is required and tag filters do not apply,
+  // so this finds any work item the user can access (Bug, Checkpoint, Feature, etc.).
+  async findWorkItemById(workItemId: number): Promise<DevOpsWorkItem | null> {
+    const fields = [
+      'System.Id',
+      'System.Title',
+      'System.State',
+      'System.WorkItemType',
+      'System.TeamProject',
+    ].join(',');
+    const response = await fetch(
+      `${this.baseUrl}/_apis/wit/workitems/${workItemId}?fields=${fields}&api-version=7.0`,
+      { headers: this.headers }
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(`Failed to fetch work item ${workItemId}: ${response.statusText}`);
+    }
+    return response.json();
   }
 
   // Get comments for a work item
