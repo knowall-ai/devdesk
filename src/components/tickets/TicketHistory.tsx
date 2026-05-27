@@ -4,7 +4,6 @@ import { format } from 'date-fns';
 import { GitCommitHorizontal, Loader2 } from 'lucide-react';
 import type { WorkItemUpdate } from '@/types';
 import Avatar from '../common/Avatar';
-import { DEFAULT_PRIORITY_LABELS } from '@/lib/priority';
 
 interface TicketHistoryProps {
   updates: WorkItemUpdate[];
@@ -24,7 +23,13 @@ const fieldLabels: Record<string, string> = {
 // Map priority numbers to labels
 function formatPriority(value?: string): string | undefined {
   if (!value) return undefined;
-  return DEFAULT_PRIORITY_LABELS[value] || value;
+  const priorityMap: Record<string, string> = {
+    '1': 'Urgent',
+    '2': 'High',
+    '3': 'Normal',
+    '4': 'Low',
+  };
+  return priorityMap[value] || value;
 }
 
 function formatFieldValue(field: string, value?: string): string {

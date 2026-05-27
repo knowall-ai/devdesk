@@ -24,6 +24,7 @@ export interface Organization {
   devOpsProject: string;
   devOpsOrg: string;
   tags: string[];
+  slaLevel?: SLALevel;
   createdAt: Date;
   updatedAt: Date;
   processTemplate?: string; // Azure DevOps process template (e.g., "T-Minus-15", "Basic")
@@ -46,20 +47,61 @@ export interface Customer {
 export type TicketStatus = 'New' | 'Open' | 'In Progress' | 'Pending' | 'Resolved' | 'Closed';
 export type TicketPriority = string;
 export type SLALevel = 'Gold' | 'Silver' | 'Bronze';
+export type SLAStatus = 'within_sla' | 'at_risk' | 'breached';
+
+// SLA target times in minutes
+export interface SLATargets {
+  firstResponseMinutes: number; // Time to first response
+  resolutionMinutes: number; // Time to resolution
+}
+
+// SLA policy with targets per priority
+export interface SLAPolicy {
+  level: SLALevel;
+  name: string;
+  description: string;
+  targets: {
+    urgent: SLATargets;
+    high: SLATargets;
+    normal: SLATargets;
+    low: SLATargets;
+  };
+}
+
+// SLA status information for a ticket
+export interface TicketSLAInfo {
+  level: SLALevel;
+  policy: SLAPolicy;
+  firstResponse: {
+    targetMinutes: number;
+    elapsedMinutes: number;
+    remainingMinutes: number;
+    status: SLAStatus;
+    met?: boolean; // true if first response has been made
+  };
+  resolution: {
+    targetMinutes: number;
+    elapsedMinutes: number;
+    remainingMinutes: number;
+    status: SLAStatus;
+    met?: boolean; // true if ticket is resolved
+  };
+}
+
 export type SLARiskStatus = 'breached' | 'at-risk' | 'on-track';
 
-// SLA Configuration per priority
-export interface SLATargets {
+// SLA Configuration per priority (hours-based, for config-driven SLA)
+export interface SLAPriorityTargets {
   responseTimeHours: number;
   resolutionTimeHours: number;
 }
 
 export interface SLAConfig {
-  [priority: string]: SLATargets;
-  Critical: SLATargets;
-  High: SLATargets;
-  Medium: SLATargets;
-  Low: SLATargets;
+  [priority: string]: SLAPriorityTargets;
+  Critical: SLAPriorityTargets;
+  High: SLAPriorityTargets;
+  Medium: SLAPriorityTargets;
+  Low: SLAPriorityTargets;
 }
 
 // SLA status for a ticket
@@ -104,8 +146,14 @@ export interface Ticket {
   workItemId: number;
   title: string;
   description: string;
+  reproSteps?: string;
+  systemInfo?: string;
+  resolution?: string;
+  mitigation?: string;
+  resolvedReason?: string;
   status: TicketStatus;
   devOpsState: string; // Original Azure DevOps state (e.g., 'New', 'Approved', 'To Do', etc.)
+  workItemType: string; // Azure DevOps work item type (e.g., 'Task', 'Bug', 'User Story')
   priority?: TicketPriority;
   requester: Customer;
   assignee?: User;
@@ -114,10 +162,14 @@ export interface Ticket {
   createdAt: Date;
   updatedAt: Date;
   resolvedAt?: Date;
+  firstResponseAt?: Date;
+  slaInfo?: TicketSLAInfo;
   devOpsUrl: string;
   project: string;
   comments: TicketComment[];
   attachments?: Attachment[];
+  // Customer's response on a Question work item (Custom.CustomerResponse)
+  customerResponse?: string;
 }
 
 export interface TicketComment {
@@ -138,6 +190,10 @@ export interface Attachment {
   createdAt: Date;
   createdBy?: User;
 }
+
+// Work item types that appear on the Tickets screen and support bulk actions.
+// Higher-level types (Epic, Feature, User Story) are managed on the Projects screen.
+export const TICKET_WORK_ITEM_TYPES = ['Task', 'Enhancement', 'Issue', 'Bug', 'Risk', 'Question'];
 
 // Maximum file size for attachments (25MB)
 export const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024;
@@ -238,6 +294,15 @@ export interface DevOpsOrganization {
   accountId: string;
   accountName: string;
   accountUri: string;
+}
+
+export interface ClassificationNode {
+  id: number;
+  name: string;
+  structureType: 'area' | 'iteration';
+  hasChildren: boolean;
+  path: string;
+  children?: ClassificationNode[];
 }
 
 export interface EmailWebhookPayload {
@@ -400,11 +465,15 @@ export interface Feature {
   updatedAt: Date;
   completedWork: number;
   remainingWork: number;
+  originalEstimate: number;
+  effort?: number; // Original effort estimate for the Feature (Microsoft.VSTS.Scheduling.Effort)
   totalWork: number;
   workItems: WorkItem[];
   devOpsUrl: string;
   tags: string[];
   priority?: TicketPriority;
+  stackRank?: number; // For ordering features (some templates)
+  backlogPriority?: number; // For ordering features (Agile/Scrum templates)
 }
 
 export interface WorkItem {
@@ -425,6 +494,14 @@ export interface WorkItem {
   devOpsUrl: string;
   tags: string[];
   priority?: TicketPriority;
+  resolution?: string;
+  mitigation?: string;
+  resolvedReason?: string;
+  // Customer's response on a Question work item (Custom.CustomerResponse)
+  customerResponse?: string;
+  // Optional ticket-specific fields (populated when item is a ticket)
+  requester?: Customer;
+  organization?: Organization;
 }
 
 // Treemap data structure for visualization
@@ -447,4 +524,51 @@ export interface TreemapConfig {
   colorScheme: TreemapColorScheme;
   showLabels: boolean;
   minBlockSize: number;
+}
+
+// Daily Standup Types
+
+/** A single work item in the standup view */
+export interface StandupWorkItem {
+  id: number;
+  title: string;
+  state: string;
+  stateCategory: string;
+  workItemType: string;
+  assignee?: User;
+  priority?: TicketPriority;
+  updatedAt: string;
+  createdAt: string;
+  project: string;
+  devOpsUrl: string;
+  tags: string[];
+  iterationPath?: string;
+  remainingWork?: number;
+}
+
+/** A column definition pulled from DevOps state configuration */
+export interface StandupColumn {
+  /** The DevOps state name (e.g. "New", "Active", "Resolved") */
+  name: string;
+  /** The DevOps state category (e.g. "Proposed", "InProgress", "Resolved", "Completed") */
+  category: string;
+  items: StandupWorkItem[];
+}
+
+/** Per-project standup data */
+export interface ProjectStandupData {
+  projectName: string;
+  columns: StandupColumn[];
+}
+
+/** Full standup response */
+export interface StandupData {
+  date: string;
+  projects: ProjectStandupData[];
+  /** Column definitions in display order (from DevOps state categories) */
+  columns: { name: string; category: string }[];
+  summary: {
+    columnCounts: Record<string, number>;
+    projectCount: number;
+  };
 }

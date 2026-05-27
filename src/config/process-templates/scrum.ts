@@ -28,6 +28,7 @@ export const scrumConfig: ProcessTemplateConfig = {
     priorityValues: Object.fromEntries(
       Object.entries(DEFAULT_PRIORITY_LABELS).map(([k, v]) => [Number(k), v])
     ),
+    resolutionTypes: ['Bug'],
   },
 
   states: {

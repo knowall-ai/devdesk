@@ -118,8 +118,7 @@ export function KPICards({ kpis }: KPICardsProps) {
           />
         </svg>
       ),
-      color:
-        kpis.slaCompliancePercent >= 90 ? 'var(--status-resolved)' : 'var(--priority-critical)',
+      color: kpis.slaCompliancePercent >= 90 ? 'var(--status-resolved)' : 'var(--priority-urgent)',
       isText: true,
     },
   ];

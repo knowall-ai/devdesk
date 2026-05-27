@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { validateOrganizationAccess } from '@/lib/devops-auth';
 import { AzureDevOpsService, workItemToTicket, setStateCategoryCache } from '@/lib/devops';
+import { TICKET_WORK_ITEM_TYPES } from '@/types';
 import type { Ticket, TicketStatus } from '@/types';
 
 // TTL cache for state categories (avoids refetching on every request)
@@ -102,6 +103,11 @@ export async function POST(request: NextRequest) {
       assignee,
       tags,
       workItemType,
+      iterationPath,
+      areaPath,
+      additionalFields,
+      parentId,
+      asTicket,
     } = body;
 
     if (!project || !title) {
@@ -136,19 +142,79 @@ export async function POST(request: NextRequest) {
         ? priorityFieldRef
         : undefined;
 
-    // Create the ticket with 'ticket' tag always included
-    const allTags = ['ticket', ...(tags || [])].filter(Boolean);
+    // Validate additionalFields: only allow known DevOps field prefixes
+    // and deny core System.* fields that are set by the handler itself
+    const ALLOWED_FIELD_PREFIXES = ['Microsoft.VSTS.', 'Custom.'];
+    const DENIED_FIELDS = new Set([
+      'System.Title',
+      'System.Description',
+      'System.Tags',
+      'System.AssignedTo',
+      'System.State',
+      'System.AreaPath',
+      'System.IterationPath',
+      'System.WorkItemType',
+    ]);
+    let validatedAdditionalFields: Record<string, string | number> | undefined;
+    if (additionalFields && typeof additionalFields === 'object') {
+      validatedAdditionalFields = {};
+      for (const [key, value] of Object.entries(additionalFields)) {
+        const isAllowedPrefix = ALLOWED_FIELD_PREFIXES.some((prefix) => key.startsWith(prefix));
+        const hasPathTraversal = /[/\\]/.test(key);
+        if (
+          isAllowedPrefix &&
+          !DENIED_FIELDS.has(key) &&
+          !hasPathTraversal &&
+          (typeof value === 'string' || typeof value === 'number')
+        ) {
+          validatedAdditionalFields[key] = value;
+        }
+      }
+    }
+
+    // Validate parentId — must be a positive integer to avoid arbitrary URL injection
+    const validatedParentId =
+      typeof parentId === 'number' && Number.isInteger(parentId) && parentId > 0
+        ? parentId
+        : undefined;
+
+    // Auto-tag with 'ticket' unless the caller explicitly opts out (asTicket: false).
+    // Defaulting to true preserves existing behaviour for any caller that omits
+    // the field — only the Kanban Board flow currently sets it false (issue #372).
+    // Sanitize the user-supplied list to strings first; a malformed request with
+    // non-string entries would otherwise throw on .toLowerCase().
+    const tagAsTicket = asTicket !== false;
+    const userTags = (Array.isArray(tags) ? tags : [])
+      .filter((t): t is string => typeof t === 'string')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    // Reject semicolons — DevOps uses ';' as the tag delimiter, so a single
+    // user-supplied tag containing ';' would silently split into multiple
+    // tags on the way through. Matches the PATCH handler.
+    if (userTags.some((t) => t.includes(';'))) {
+      return NextResponse.json({ error: 'Tags cannot contain semicolons' }, { status: 400 });
+    }
+    // Drop any case-variant of "ticket" from user input first so the dedup is
+    // case-insensitive — Set() with exact-string equality wouldn't catch
+    // "Ticket" vs "ticket" and we'd end up with both.
+    const userTagsNoTicket = userTags.filter((t) => t.toLowerCase() !== 'ticket');
+    const allTags = tagAsTicket ? ['ticket', ...userTagsNoTicket] : userTagsNoTicket;
     const workItem = await devopsService.createTicketWithAssignee(
       project,
       title,
       description || '',
-      session.user?.email || 'unknown',
-      priority,
-      allTags,
-      assignee,
-      workItemType || 'Task',
-      Boolean(validatedFieldRef),
-      validatedFieldRef
+      {
+        priority,
+        tags: allTags,
+        assigneeId: assignee,
+        workItemType: workItemType || 'Task',
+        hasPriority: Boolean(validatedFieldRef),
+        priorityFieldRef: validatedFieldRef,
+        additionalFields: validatedAdditionalFields,
+        iterationPath: typeof iterationPath === 'string' ? iterationPath : undefined,
+        areaPath: typeof areaPath === 'string' ? areaPath : undefined,
+        parentId: validatedParentId,
+      }
     );
 
     const ticket = workItemToTicket(workItem);
@@ -194,7 +260,7 @@ export async function GET(request: NextRequest) {
     await fetchAndCacheStateCategories(session.accessToken, organization);
 
     const devopsService = new AzureDevOpsService(session.accessToken, organization);
-    const tickets = await devopsService.getAllTickets(ticketsOnly);
+    const tickets = await devopsService.getAllTickets(ticketsOnly, TICKET_WORK_ITEM_TYPES);
 
     // Filter tickets based on view
     const filteredTickets = filterTicketsByView(tickets, view, session.user?.email);

@@ -28,6 +28,10 @@ export interface ProcessTemplateConfig {
   fields: {
     priority?: string; // Field ref for priority (undefined if not supported)
     priorityValues?: Record<number, string>; // Map numeric values to display names
+    resolutionTypes?: string[]; // Work item types that support the Resolution field
+    resolutionFieldOverrides?: Record<string, string>; // Per-type field ref overrides for Resolution
+    mitigationTypes?: string[]; // Work item types that support the Mitigation field
+    mitigationFieldOverrides?: Record<string, string>; // Per-type field ref overrides for Mitigation
   };
 
   // State mappings - map actual DevOps states to our UI categories
@@ -50,6 +54,7 @@ export type StateCategory = 'New' | 'Active' | 'Resolved' | 'Closed' | 'Removed'
 import { tMinus15Config } from './t-minus-15';
 import { basicConfig } from './basic';
 import { scrumConfig } from './scrum';
+import { agileConfig } from './agile';
 
 // Registry of all supported templates
 // Key is normalized template name (lowercase, hyphens)
@@ -57,6 +62,7 @@ const templates: Record<string, ProcessTemplateConfig> = {
   't-minus-15': tMinus15Config,
   basic: basicConfig,
   scrum: scrumConfig,
+  agile: agileConfig,
 };
 
 // Default template for backward compatibility
@@ -116,6 +122,38 @@ export function hasPriorityField(config: ProcessTemplateConfig): boolean {
 }
 
 /**
+ * Check if a work item type supports the Resolution field in a given template
+ */
+export function hasResolutionField(workItemType: string, config: ProcessTemplateConfig): boolean {
+  return config.fields.resolutionTypes?.includes(workItemType) ?? false;
+}
+
+const DEFAULT_RESOLUTION_FIELD = 'Microsoft.VSTS.Common.Resolution';
+const DEFAULT_MITIGATION_FIELD = 'Microsoft.VSTS.CMMI.Mitigation';
+
+/**
+ * Get the Azure DevOps field reference name for the Resolution field
+ * Some work item types use a custom field (e.g., Task uses Custom.TaskResolution)
+ */
+export function getResolutionFieldRef(workItemType: string, config: ProcessTemplateConfig): string {
+  return config.fields.resolutionFieldOverrides?.[workItemType] ?? DEFAULT_RESOLUTION_FIELD;
+}
+
+/**
+ * Check if a work item type supports the Mitigation field in a given template
+ */
+export function hasMitigationField(workItemType: string, config: ProcessTemplateConfig): boolean {
+  return config.fields.mitigationTypes?.includes(workItemType) ?? false;
+}
+
+/**
+ * Get the Azure DevOps field reference name for the Mitigation field
+ */
+export function getMitigationFieldRef(workItemType: string, config: ProcessTemplateConfig): string {
+  return config.fields.mitigationFieldOverrides?.[workItemType] ?? DEFAULT_MITIGATION_FIELD;
+}
+
+/**
  * Get priority display name from numeric value
  */
 export function getPriorityLabel(value: number, config: ProcessTemplateConfig): string | undefined {
@@ -126,3 +164,4 @@ export function getPriorityLabel(value: number, config: ProcessTemplateConfig): 
 export { tMinus15Config } from './t-minus-15';
 export { basicConfig } from './basic';
 export { scrumConfig } from './scrum';
+export { agileConfig } from './agile';
