@@ -238,7 +238,16 @@ export async function GET(request: NextRequest) {
       { name: 'Closed', category: 'Completed' },
     ];
 
-    const displayColumnNames = new Set(displayColumns.map((c) => c.name));
+    // Normalized lookup: lowercase + drop every non-alphanumeric. This
+    // matches "To Do" / "to do" / "To-Do" / "ToDo" all back to the same
+    // key — different process templates serialize the same logical state
+    // in different ways, and the strict Set.has(state) check this code
+    // used to do missed all but the exact-canonical form, dropping those
+    // items into the "New" fallback (issue #395).
+    const normalize = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const displayColumnByNormalized = new Map(
+      displayColumns.map((c) => [normalize(c.name), c.name])
+    );
 
     // Map non-display states to the fallback column for their category
     const categoryFallback: Record<string, string> = {
@@ -251,7 +260,8 @@ export async function GET(request: NextRequest) {
 
     // Resolve any DevOps state to one of the 6 display columns
     function resolveColumn(state: string): string {
-      if (displayColumnNames.has(state)) return state;
+      const canonical = displayColumnByNormalized.get(normalize(state));
+      if (canonical) return canonical;
       const category = stateCategories[state] || 'Proposed';
       return categoryFallback[category] || 'New';
     }
