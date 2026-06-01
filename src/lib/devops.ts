@@ -1273,7 +1273,25 @@ export class AzureDevOpsService {
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to update work item: ${response.statusText}`);
+      // DevOps returns a structured error body for blocked transitions
+      // ("TF401320: Rule Error… transition not allowed"). Surface that so
+      // the route can pass through a clear, user-facing reason instead of
+      // collapsing it to a bare status code (issue #391).
+      let detail = response.statusText;
+      try {
+        const body = await response.text();
+        if (body) {
+          try {
+            const parsed = JSON.parse(body) as { message?: string };
+            if (parsed.message) detail = parsed.message;
+          } catch {
+            detail = body.slice(0, 500);
+          }
+        }
+      } catch {
+        // Body read failure — keep the status-text fallback above.
+      }
+      throw new DevOpsApiError(response.status, `Failed to update work item state: ${detail}`);
     }
 
     return response.json();

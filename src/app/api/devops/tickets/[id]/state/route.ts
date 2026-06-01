@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { AzureDevOpsService, workItemToTicket } from '@/lib/devops';
+import { AzureDevOpsService, DevOpsApiError, workItemToTicket } from '@/lib/devops';
 import { isEmailTicket, extractRequesterEmail, sendStatusChangeNotification } from '@/lib/email';
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -84,6 +84,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     return NextResponse.json({ error: 'Ticket not found' }, { status: 404 });
   } catch (error) {
     console.error('Error updating ticket state:', error);
+    // Pass through the upstream message for blocked state transitions and
+    // similar workflow errors — collapsing everything to a generic 500
+    // means the UI can't tell the user *why* the drag failed (issue #391).
+    if (error instanceof DevOpsApiError) {
+      const status = error.status === 400 || error.status === 409 ? error.status : 500;
+      return NextResponse.json({ error: error.message }, { status });
+    }
     return NextResponse.json({ error: 'Failed to update ticket state' }, { status: 500 });
   }
 }
