@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { toast } from 'sonner';
 import { X, Copy, Check, Zap, ExternalLink, Loader2 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import type { User } from '@/types';
@@ -212,12 +213,23 @@ function ZapDialogContent({
 
     setZapConfirmed(true);
 
-    // Call the callback to post a comment on the ticket
+    // Persistent confirmation — the in-dialog success card disappears when
+    // the dialog auto-closes; a toast survives so the user has a clear
+    // signal that the zap landed even after the dialog is gone.
+    toast.success(`⚡ Sent ${actualAmount.toLocaleString()} sats to ${agent.displayName}`);
+
+    // Post a comment on the ticket so the zap is recorded in the activity log.
+    // If that fails, the payment itself still went through from the wallet's
+    // perspective — but surface the comment failure so the user knows it
+    // wasn't logged on the ticket and can retry / add it manually.
     if (onZapSent) {
       try {
         await onZapSent(actualAmount);
       } catch (err) {
         console.error('[ZapDialog] Failed to post zap comment:', err);
+        toast.error(
+          'Zap sent, but failed to record it on the ticket — you may want to add a comment manually.'
+        );
       }
     }
 
