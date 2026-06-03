@@ -32,11 +32,13 @@ function CardContent({
   typeInfo,
   organization,
   onZapClick,
+  showTitleTooltip = true,
 }: {
   item: KanbanItem;
   typeInfo?: WorkItemType;
   organization?: { name: string };
   onZapClick?: (item: KanbanItem) => void;
+  showTitleTooltip?: boolean;
 }) {
   return (
     <>
@@ -57,7 +59,7 @@ function CardContent({
 
       <h4
         className="mb-3 line-clamp-2 text-sm font-medium text-[var(--text-primary)]"
-        title={item.title}
+        title={showTitleTooltip ? item.title : undefined}
       >
         {item.title}
       </h4>
@@ -162,6 +164,7 @@ export default function KanbanCard({
             typeInfo={typeInfo}
             organization={organization}
             onZapClick={onZapClick}
+            showTitleTooltip={!hasUnrecognizedState}
           />
         </button>
       ) : (
@@ -171,6 +174,7 @@ export default function KanbanCard({
             typeInfo={typeInfo}
             organization={organization}
             onZapClick={onZapClick}
+            showTitleTooltip={!hasUnrecognizedState}
           />
         </Link>
       )}
