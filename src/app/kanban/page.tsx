@@ -22,10 +22,12 @@ const STANDUP_CACHE_TTL_MS = 30 * 1000;
 const standupCache: Map<string, { data: StandupData; timestamp: number }> = new Map();
 const standupInFlight: Map<string, Promise<StandupData>> = new Map();
 
-// How often the "Live update" toggle polls for changes. Polling only runs
-// while the tab is visible (see visibilitychange handler) and an extra
-// fetch fires on tab-return so the board catches up immediately.
-const LIVE_UPDATE_INTERVAL_MS = 30 * 1000;
+// How often the "Live update" toggle polls for changes. Tied to the cache
+// TTL so the two stay in sync — every tick will bypass the cache (force
+// refresh) but the cadence still matches when data is considered fresh.
+// The interval is started/stopped based on visibility (see effect below),
+// and an extra fetch fires on tab-return so the board catches up.
+const LIVE_UPDATE_INTERVAL_MS = STANDUP_CACHE_TTL_MS;
 const LIVE_UPDATE_STORAGE_KEY = 'zapdesk:kanban:liveUpdate';
 
 function cacheKey(organization: string, currentSprintOnly: boolean): string {
@@ -118,6 +120,11 @@ function StandupPageContent() {
   const [liveUpdate, setLiveUpdate] = useState(false);
   const liveUpdateRef = useRef(liveUpdate);
   liveUpdateRef.current = liveUpdate;
+  // Tracks whether we've finished reading the persisted value from
+  // localStorage. The persist effect waits on this so its initial-mount run
+  // (with the default `false`) can't overwrite a stored `'true'` before the
+  // restore effect has had a chance to apply it.
+  const didHydrateRef = useRef(false);
 
   // Restore the user's last "Live update" choice on mount so they don't have
   // to re-enable it every visit. Done in an effect to keep SSR stable.
@@ -129,6 +136,7 @@ function StandupPageContent() {
     } catch {
       // localStorage may throw in private/sandboxed contexts — ignore
     }
+    didHydrateRef.current = true;
   }, []);
 
   // Detail dialog state — clicking a card fetches the full ticket and
@@ -168,8 +176,11 @@ function StandupPageContent() {
       setError(null);
 
       try {
-        // Dedupe concurrent requests for the same cache key
-        let promise = forceRefresh ? undefined : standupInFlight.get(key);
+        // Dedupe concurrent requests for the same cache key. forceRefresh
+        // bypasses the cache TTL above but still coalesces with any
+        // in-flight request so a tick + visibilitychange + mutation patch
+        // don't all double-hit the API simultaneously.
+        let promise = standupInFlight.get(key);
         if (!promise) {
           promise = (async () => {
             const params = new URLSearchParams();
@@ -217,34 +228,61 @@ function StandupPageContent() {
     }
   }, [session?.accessToken, hasOrganization, fetchStandupData]);
 
-  // Live update: poll while the tab is visible, pause when hidden, and
-  // refetch immediately when the tab comes back into focus so the board
-  // catches up without waiting for the next tick.
+  // Live update: while the tab is visible, run a poll on the cache TTL
+  // cadence. When the tab is hidden the interval is cleared so no timer
+  // is alive in the background. When the tab returns we trigger an
+  // immediate refetch and restart the interval, so the board catches up
+  // without waiting for the next tick.
   useEffect(() => {
     if (!liveUpdate) return;
 
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
     const tick = () => {
-      if (liveUpdateRef.current && document.visibilityState === 'visible') {
+      if (liveUpdateRef.current) {
         fetchStandupData(true, true);
       }
     };
-    const interval = setInterval(tick, LIVE_UPDATE_INTERVAL_MS);
+
+    const startInterval = () => {
+      if (intervalId === null) {
+        intervalId = setInterval(tick, LIVE_UPDATE_INTERVAL_MS);
+      }
+    };
+
+    const stopInterval = () => {
+      if (intervalId !== null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
 
     const onVisibilityChange = () => {
-      if (liveUpdateRef.current && document.visibilityState === 'visible') {
+      if (!liveUpdateRef.current) return;
+      if (document.visibilityState === 'visible') {
         fetchStandupData(true, true);
+        startInterval();
+      } else {
+        stopInterval();
       }
     };
+
+    if (document.visibilityState === 'visible') {
+      startInterval();
+    }
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
-      clearInterval(interval);
+      stopInterval();
       document.removeEventListener('visibilitychange', onVisibilityChange);
     };
   }, [liveUpdate, fetchStandupData]);
 
-  // Persist the toggle so it carries across page reloads
+  // Persist the toggle so it carries across page reloads. Skipped until
+  // after the restore effect has hydrated the value, so we don't briefly
+  // overwrite a stored `'true'` with the initial `false`.
   useEffect(() => {
+    if (!didHydrateRef.current) return;
     try {
       window.localStorage.setItem(LIVE_UPDATE_STORAGE_KEY, liveUpdate ? 'true' : 'false');
     } catch {
