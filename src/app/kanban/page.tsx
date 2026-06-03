@@ -22,6 +22,12 @@ const STANDUP_CACHE_TTL_MS = 30 * 1000;
 const standupCache: Map<string, { data: StandupData; timestamp: number }> = new Map();
 const standupInFlight: Map<string, Promise<StandupData>> = new Map();
 
+// How often the "Live update" toggle polls for changes. Polling only runs
+// while the tab is visible (see visibilitychange handler) and an extra
+// fetch fires on tab-return so the board catches up immediately.
+const LIVE_UPDATE_INTERVAL_MS = 30 * 1000;
+const LIVE_UPDATE_STORAGE_KEY = 'zapdesk:kanban:liveUpdate';
+
 function cacheKey(organization: string, currentSprintOnly: boolean): string {
   return `${organization}::${currentSprintOnly ? 'sprint' : 'all'}`;
 }
@@ -109,9 +115,21 @@ function StandupPageContent() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [autoRefresh, setAutoRefresh] = useState(false);
-  const autoRefreshRef = useRef(autoRefresh);
-  autoRefreshRef.current = autoRefresh;
+  const [liveUpdate, setLiveUpdate] = useState(false);
+  const liveUpdateRef = useRef(liveUpdate);
+  liveUpdateRef.current = liveUpdate;
+
+  // Restore the user's last "Live update" choice on mount so they don't have
+  // to re-enable it every visit. Done in an effect to keep SSR stable.
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(LIVE_UPDATE_STORAGE_KEY) === 'true') {
+        setLiveUpdate(true);
+      }
+    } catch {
+      // localStorage may throw in private/sandboxed contexts — ignore
+    }
+  }, []);
 
   // Detail dialog state — clicking a card fetches the full ticket and
   // opens it in a dialog rather than navigating to the full page (#368).
@@ -199,15 +217,40 @@ function StandupPageContent() {
     }
   }, [session?.accessToken, hasOrganization, fetchStandupData]);
 
+  // Live update: poll while the tab is visible, pause when hidden, and
+  // refetch immediately when the tab comes back into focus so the board
+  // catches up without waiting for the next tick.
   useEffect(() => {
-    if (!autoRefresh) return;
-    const interval = setInterval(() => {
-      if (autoRefreshRef.current) {
+    if (!liveUpdate) return;
+
+    const tick = () => {
+      if (liveUpdateRef.current && document.visibilityState === 'visible') {
         fetchStandupData(true, true);
       }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [autoRefresh, fetchStandupData]);
+    };
+    const interval = setInterval(tick, LIVE_UPDATE_INTERVAL_MS);
+
+    const onVisibilityChange = () => {
+      if (liveUpdateRef.current && document.visibilityState === 'visible') {
+        fetchStandupData(true, true);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [liveUpdate, fetchStandupData]);
+
+  // Persist the toggle so it carries across page reloads
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LIVE_UPDATE_STORAGE_KEY, liveUpdate ? 'true' : 'false');
+    } catch {
+      // ignore — non-fatal
+    }
+  }, [liveUpdate]);
 
   // Generic state-change. Pass `project` when known to avoid an
   // expensive cross-project scan on the server.
@@ -467,18 +510,19 @@ function StandupPageContent() {
                 Current Sprint
               </label>
 
-              {/* Auto-refresh toggle */}
+              {/* Live update toggle */}
               <label
                 className="flex cursor-pointer items-center gap-2 text-xs"
                 style={{ color: 'var(--text-muted)' }}
+                title="Refresh the board automatically every 30 seconds while this tab is visible"
               >
                 <input
                   type="checkbox"
-                  checked={autoRefresh}
-                  onChange={(e) => setAutoRefresh(e.target.checked)}
+                  checked={liveUpdate}
+                  onChange={(e) => setLiveUpdate(e.target.checked)}
                   className="accent-[var(--primary)]"
                 />
-                Auto-refresh
+                Live update
               </label>
 
               {/* Manual refresh */}
