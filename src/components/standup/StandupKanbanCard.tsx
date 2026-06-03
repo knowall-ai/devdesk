@@ -71,7 +71,10 @@ export default function StandupKanbanCard({ item, isDragging, onClick }: Standup
         </div>
       </div>
 
-      <h4 className="mb-2 line-clamp-2 text-sm font-medium text-[var(--text-primary)]">
+      <h4
+        className="mb-2 line-clamp-2 text-sm font-medium text-[var(--text-primary)]"
+        title={item.title}
+      >
         {item.title}
       </h4>
 

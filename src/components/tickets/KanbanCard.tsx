@@ -55,7 +55,10 @@ function CardContent({
         <PriorityIndicator priority={item.priority} />
       </div>
 
-      <h4 className="mb-3 line-clamp-2 text-sm font-medium text-[var(--text-primary)]">
+      <h4
+        className="mb-3 line-clamp-2 text-sm font-medium text-[var(--text-primary)]"
+        title={item.title}
+      >
         {item.title}
       </h4>
 
