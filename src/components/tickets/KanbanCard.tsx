@@ -32,13 +32,11 @@ function CardContent({
   typeInfo,
   organization,
   onZapClick,
-  showTitleTooltip = true,
 }: {
   item: KanbanItem;
   typeInfo?: WorkItemType;
   organization?: { name: string };
   onZapClick?: (item: KanbanItem) => void;
-  showTitleTooltip?: boolean;
 }) {
   return (
     <>
@@ -57,10 +55,7 @@ function CardContent({
         <PriorityIndicator priority={item.priority} />
       </div>
 
-      <h4
-        className="mb-3 line-clamp-2 text-sm font-medium text-[var(--text-primary)]"
-        title={showTitleTooltip ? item.title : undefined}
-      >
+      <h4 className="mb-3 line-clamp-2 text-sm font-medium text-[var(--text-primary)]">
         {item.title}
       </h4>
 
@@ -144,10 +139,15 @@ export default function KanbanCard({
       {...(readOnly ? {} : attributes)}
       {...(readOnly ? {} : listeners)}
       className={`kanban-card ${isDragging ? 'kanban-card-dragging' : ''} ${hasUnrecognizedState ? 'kanban-card-unrecognized' : ''}`}
+      // Card-level tooltip so hovering anywhere on the card shows the full
+      // work item title (the <h4> truncates with line-clamp-2). When the
+      // card is in an unrecognized state, the state warning takes priority.
+      // Specific child controls (e.g. the Zap button) keep their own title
+      // and override locally on hover.
       title={
         hasUnrecognizedState
           ? `State "${getItemState(item)}" is not a recognized Kanban column`
-          : undefined
+          : item.title
       }
     >
       {onItemClick ? (
@@ -164,7 +164,6 @@ export default function KanbanCard({
             typeInfo={typeInfo}
             organization={organization}
             onZapClick={onZapClick}
-            showTitleTooltip={!hasUnrecognizedState}
           />
         </button>
       ) : (
@@ -174,7 +173,6 @@ export default function KanbanCard({
             typeInfo={typeInfo}
             organization={organization}
             onZapClick={onZapClick}
-            showTitleTooltip={!hasUnrecognizedState}
           />
         </Link>
       )}
