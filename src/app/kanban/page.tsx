@@ -552,7 +552,7 @@ function StandupPageContent() {
               <label
                 className="flex cursor-pointer items-center gap-2 text-xs"
                 style={{ color: 'var(--text-muted)' }}
-                title="Refresh the board automatically every 30 seconds while this tab is visible"
+                title={`Refresh the board automatically every ${Math.round(LIVE_UPDATE_INTERVAL_MS / 1000)} seconds while this tab is visible`}
               >
                 <input
                   type="checkbox"
