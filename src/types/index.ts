@@ -566,6 +566,13 @@ export interface StandupData {
   projects: ProjectStandupData[];
   /** Column definitions in display order (from DevOps state categories) */
   columns: { name: string; category: string }[];
+  /**
+   * Work item type -> the DevOps state names that type defines. States are
+   * per work item type, so a display column valid for one card can be invalid
+   * for another; the board uses this to disable impossible drop targets.
+   * Absent when state discovery failed — treat that as "allow everything".
+   */
+  allowedStatesByType?: Record<string, string[]>;
   summary: {
     columnCounts: Record<string, number>;
     projectCount: number;

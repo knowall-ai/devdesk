@@ -11,27 +11,37 @@ import type {
   TicketPriority,
 } from '@/types';
 
-// Per-org TTL cache + in-flight dedup for state categories.
+/** State definitions for an org, in both the shapes the board needs. */
+interface StateMetadata {
+  /** State name -> category, unioned across every project and work item type. */
+  categories: Record<string, string>;
+  /**
+   * Work item type -> the state names that type actually defines. The union in
+   * `categories` can't answer "may this card enter that column?", because
+   * states are defined per work item type: an Agile-template Bug has no
+   * "To Do" state even when a Task in the same project does (#391).
+   */
+  statesByType: Record<string, string[]>;
+}
+
+// Per-org TTL cache + in-flight dedup for state metadata.
 // State definitions virtually never change in production, so we cache
 // aggressively (1 hour). The dedup map prevents thundering-herd refetches
 // when many requests arrive simultaneously after a cache expiry.
-const stateCategoryCacheByOrg: Map<
-  string,
-  { categories: Record<string, string>; timestamp: number }
-> = new Map();
-const stateCategoryInFlight: Map<string, Promise<Record<string, string>>> = new Map();
+const stateCategoryCacheByOrg: Map<string, StateMetadata & { timestamp: number }> = new Map();
+const stateCategoryInFlight: Map<string, Promise<StateMetadata>> = new Map();
 const STATE_CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
 
-// Fetch work item states and build state-to-category mapping
-async function fetchStateCategories(
+// Fetch work item states, keyed both by state name and by work item type
+async function fetchStateMetadata(
   devopsService: AzureDevOpsService,
   accessToken: string,
   organization: string
-): Promise<Record<string, string>> {
+): Promise<StateMetadata> {
   const cached = stateCategoryCacheByOrg.get(organization);
   if (cached) {
     if (Date.now() - cached.timestamp < STATE_CACHE_TTL_MS) {
-      return cached.categories;
+      return { categories: cached.categories, statesByType: cached.statesByType };
     }
     // Expired — evict so the map doesn't accumulate stale per-org entries forever.
     stateCategoryCacheByOrg.delete(organization);
@@ -40,34 +50,37 @@ async function fetchStateCategories(
   const inFlight = stateCategoryInFlight.get(organization);
   if (inFlight) return inFlight;
 
-  const promise = doFetchStateCategories(devopsService, accessToken, organization);
+  const promise = doFetchStateMetadata(devopsService, accessToken, organization);
   stateCategoryInFlight.set(organization, promise);
   try {
-    const categories = await promise;
-    if (Object.keys(categories).length > 0) {
-      stateCategoryCacheByOrg.set(organization, { categories, timestamp: Date.now() });
+    const metadata = await promise;
+    if (Object.keys(metadata.categories).length > 0) {
+      stateCategoryCacheByOrg.set(organization, { ...metadata, timestamp: Date.now() });
     }
-    return categories;
+    return metadata;
   } finally {
     stateCategoryInFlight.delete(organization);
   }
 }
 
-async function doFetchStateCategories(
+async function doFetchStateMetadata(
   devopsService: AzureDevOpsService,
   accessToken: string,
   organization: string
-): Promise<Record<string, string>> {
+): Promise<StateMetadata> {
+  const empty: StateMetadata = { categories: {}, statesByType: {} };
+
   // Reuse the cached project list rather than re-fetching independently
   let projects: { name: string }[] = [];
   try {
     projects = await devopsService.getProjects();
   } catch {
-    return {};
+    return empty;
   }
-  if (projects.length === 0) return {};
+  if (projects.length === 0) return empty;
 
   const stateCategories: Record<string, string> = {};
+  const statesByType: Record<string, Set<string>> = {};
 
   // Fetch states from ALL projects to cover different process templates
   const projectResults = await Promise.allSettled(
@@ -101,30 +114,46 @@ async function doFetchStateCategories(
             }
           );
 
-          if (!statesResponse.ok) return [];
+          if (!statesResponse.ok) return { type: witType.name, states: [] };
           const statesData = await statesResponse.json();
-          return (statesData.value || []) as { name: string; category: string }[];
+          return {
+            type: witType.name,
+            states: (statesData.value || []) as { name: string; category: string }[],
+          };
         })
       );
 
       return stateResults
         .filter(
-          (r): r is PromiseFulfilledResult<{ name: string; category: string }[]> =>
-            r.status === 'fulfilled'
+          (
+            r
+          ): r is PromiseFulfilledResult<{
+            type: string;
+            states: { name: string; category: string }[];
+          }> => r.status === 'fulfilled'
         )
-        .flatMap((r) => r.value);
+        .map((r) => r.value);
     })
   );
 
   for (const result of projectResults) {
-    if (result.status === 'fulfilled') {
-      for (const state of result.value) {
+    if (result.status !== 'fulfilled') continue;
+    for (const { type, states } of result.value) {
+      for (const state of states) {
         stateCategories[state.name] = state.category;
+        // Union across projects: the same type can carry different states in
+        // different projects, and a drop is legitimate if any of them allows it.
+        (statesByType[type] ??= new Set()).add(state.name);
       }
     }
   }
 
-  return stateCategories;
+  return {
+    categories: stateCategories,
+    statesByType: Object.fromEntries(
+      Object.entries(statesByType).map(([type, states]) => [type, Array.from(states)])
+    ),
+  };
 }
 
 function mapPriority(priority?: number): TicketPriority | undefined {
@@ -196,7 +225,7 @@ export async function GET(request: NextRequest) {
 
     // Step 1: Fetch state categories dynamically from DevOps (cached + deduped)
     const devopsService = new AzureDevOpsService(session.accessToken, organization);
-    const stateCategories = await fetchStateCategories(
+    const { categories: stateCategories, statesByType } = await fetchStateMetadata(
       devopsService,
       session.accessToken,
       organization
@@ -304,6 +333,9 @@ export async function GET(request: NextRequest) {
       date: targetDate.toISOString().split('T')[0],
       projects,
       columns: displayColumns,
+      // Lets the board disable drop targets a card's type can't enter, instead
+      // of letting DevOps reject the PATCH and snapping the card back (#391).
+      allowedStatesByType: statesByType,
       summary: {
         columnCounts,
         projectCount: projects.length,
