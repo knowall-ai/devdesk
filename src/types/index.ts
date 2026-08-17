@@ -169,6 +169,11 @@ export interface Ticket {
   attachments?: Attachment[];
   // Customer's response on a Question work item (Custom.CustomerResponse)
   customerResponse?: string;
+  // Effort hours from Microsoft.VSTS.Scheduling.*. Undefined when the field has
+  // never been set on the work item, which DevOps reports by omitting it.
+  completedWork?: number;
+  remainingWork?: number;
+  originalEstimate?: number;
 }
 
 export interface TicketComment {

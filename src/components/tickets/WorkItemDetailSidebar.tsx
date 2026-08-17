@@ -487,8 +487,9 @@ export default function WorkItemDetailSidebar({
         </div>
       </div>
 
-      {/* Hours Summary - for work items */}
-      {showEffortHours && (workItem.completedWork > 0 || workItem.remainingWork > 0) && (
+      {/* Hours Summary - for work items. Rendered even when the hours are unset,
+          so "0h remaining" is stated rather than the row vanishing. */}
+      {showEffortHours && (
         <div>
           <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
             Hours

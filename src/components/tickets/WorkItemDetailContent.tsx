@@ -460,45 +460,44 @@ export default function WorkItemDetailContent({
       {showResolution && <ResolutionField workItem={workItem} onUpdate={onUpdate} />}
       {showMitigation && <MitigationField workItem={workItem} onUpdate={onUpdate} />}
 
-      {/* Effort tracking */}
-      {showEffortTracking &&
-        (workItem.completedWork > 0 ||
-          workItem.remainingWork > 0 ||
-          workItem.originalEstimate > 0) && (
-          <div className="card mt-4 p-4">
-            <h3 className="mb-3 text-sm font-medium" style={{ color: 'var(--text-muted)' }}>
-              Effort Tracking
-            </h3>
-            <div className="flex gap-6">
-              <div>
-                <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-                  Completed
-                </span>
-                <span className="text-lg font-bold" style={{ color: 'var(--primary)' }}>
-                  {formatHours(workItem.completedWork)}h
-                </span>
-              </div>
-              <div>
-                <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-                  Remaining
-                </span>
-                <span className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
-                  {formatHours(workItem.remainingWork)}h
-                </span>
-              </div>
-              {workItem.originalEstimate > 0 && (
-                <div>
-                  <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-                    Estimate
-                  </span>
-                  <span className="text-lg font-bold" style={{ color: 'var(--text-secondary)' }}>
-                    {formatHours(workItem.originalEstimate)}h
-                  </span>
-                </div>
-              )}
+      {/* Effort tracking. Shown whenever the caller enables it, including when
+          the hours are unset — "Remaining 0h" is information, an absent panel
+          reads as "this work item doesn't track effort". */}
+      {showEffortTracking && (
+        <div className="card mt-4 p-4">
+          <h3 className="mb-3 text-sm font-medium" style={{ color: 'var(--text-muted)' }}>
+            Effort Tracking
+          </h3>
+          <div className="flex gap-6">
+            <div>
+              <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
+                Completed
+              </span>
+              <span className="text-lg font-bold" style={{ color: 'var(--primary)' }}>
+                {formatHours(workItem.completedWork)}h
+              </span>
             </div>
+            <div>
+              <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
+                Remaining
+              </span>
+              <span className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
+                {formatHours(workItem.remainingWork)}h
+              </span>
+            </div>
+            {workItem.originalEstimate > 0 && (
+              <div>
+                <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
+                  Estimate
+                </span>
+                <span className="text-lg font-bold" style={{ color: 'var(--text-secondary)' }}>
+                  {formatHours(workItem.originalEstimate)}h
+                </span>
+              </div>
+            )}
           </div>
-        )}
+        </div>
+      )}
 
       {/* Comments */}
       {compact ? (
