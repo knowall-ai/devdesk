@@ -43,3 +43,27 @@ export function canTypeEnterColumn(
   const target = normalizeStateName(columnName);
   return states.some((state) => normalizeStateName(state) === target);
 }
+
+/**
+ * Translate a display column name into the state name DevOps actually expects
+ * for this work item type.
+ *
+ * The column label and the state name are NOT interchangeable. The board shows
+ * "To Do" while the KnowAll process defines the state as "Todo", and PATCHing
+ * the label verbatim is rejected — which is why no card could be dragged into
+ * that column regardless of its type (#391).
+ *
+ * Falls back to the column name when the type's states are unknown, leaving
+ * the server to have the final say.
+ */
+export function resolveStateForColumn(
+  workItemType: string | undefined,
+  columnName: string,
+  allowedStatesByType: Record<string, string[]> | undefined
+): string {
+  if (!workItemType) return columnName;
+  const states = allowedStatesByType?.[workItemType];
+  if (!states || states.length === 0) return columnName;
+  const target = normalizeStateName(columnName);
+  return states.find((state) => normalizeStateName(state) === target) ?? columnName;
+}

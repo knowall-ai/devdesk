@@ -20,7 +20,7 @@ import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { ChevronDown, ChevronRight, Info } from 'lucide-react';
 import StandupKanbanCard from './StandupKanbanCard';
 import { getColumnIcon, getColumnColor } from './columnConfig';
-import { canTypeEnterColumn } from '@/lib/kanban-columns';
+import { canTypeEnterColumn, resolveStateForColumn } from '@/lib/kanban-columns';
 import type { StandupColumn, StandupWorkItem } from '@/types';
 
 // Done-category columns only show items changed in the last 7 days; this hint
@@ -250,8 +250,12 @@ export default function KanbanGroupSection({
 
       setIsUpdating(true);
       try {
-        // targetCol IS the DevOps state name — pass it directly
-        await onStateChange(activeItemId, targetCol);
+        // The column label is not necessarily the state name — "To Do" is the
+        // state "Todo" in the KnowAll process — so translate before writing.
+        await onStateChange(
+          activeItemId,
+          resolveStateForColumn(dragged?.workItemType, targetCol, allowedStatesByType)
+        );
       } catch (error) {
         console.error('Failed to update state:', error);
         syncFromProps();

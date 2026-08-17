@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { validateOrganizationAccess } from '@/lib/devops-auth';
 import { AzureDevOpsService } from '@/lib/devops';
+import { normalizeStateName } from '@/lib/kanban-columns';
 import type {
   StandupData,
   StandupWorkItem,
@@ -267,7 +268,13 @@ export async function GET(request: NextRequest) {
       { name: 'Closed', category: 'Completed' },
     ];
 
-    const displayColumnNames = new Set(displayColumns.map((c) => c.name));
+    // Match column names tolerantly. The state is spelled "Todo" in the KnowAll
+    // process while the column is labelled "To Do", and a byte-exact comparison
+    // sent every one of those items to the category fallback — i.e. into "New",
+    // leaving the "To Do" column permanently empty (#395).
+    const displayColumnByNormalized = new Map(
+      displayColumns.map((c) => [normalizeStateName(c.name), c.name])
+    );
 
     // Map non-display states to the fallback column for their category
     const categoryFallback: Record<string, string> = {
@@ -280,7 +287,8 @@ export async function GET(request: NextRequest) {
 
     // Resolve any DevOps state to one of the 6 display columns
     function resolveColumn(state: string): string {
-      if (displayColumnNames.has(state)) return state;
+      const matched = displayColumnByNormalized.get(normalizeStateName(state));
+      if (matched) return matched;
       const category = stateCategories[state] || 'Proposed';
       return categoryFallback[category] || 'New';
     }
