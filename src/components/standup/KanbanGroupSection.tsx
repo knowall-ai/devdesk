@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useMemo, useCallback, useEffect } from 'react';
+import { toast } from 'sonner';
 import {
   DndContext,
   DragOverlay,
@@ -222,6 +223,15 @@ export default function KanbanGroupSection({
           map[col.name] = col.items;
         }
         setLocalItems(map);
+        // Surface the upstream reason. A work item can only enter states its
+        // own work item type defines, so drops onto a column the type has no
+        // state for are rejected by DevOps ("TF401320: Rule Error…"). Without
+        // this toast the card just snaps back with no explanation (#391, #366).
+        toast.error(
+          error instanceof Error && error.message
+            ? `Couldn't move to "${targetCol}": ${error.message}`
+            : `Couldn't move to "${targetCol}"`
+        );
       } finally {
         setIsUpdating(false);
       }
