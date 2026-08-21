@@ -50,35 +50,34 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const projects = await devopsService.getProjects();
 
     for (const project of projects) {
+      let workItem;
       try {
-        const workItem = await devopsService.getWorkItem(project.name, ticketId);
-        if (workItem) {
-          const oldState = workItem.fields?.['System.State'] || 'Unknown';
-
-          const updatedWorkItem = await devopsService.updateTicketState(
-            project.name,
-            ticketId,
-            state
-          );
-
-          notifyStateChange(updatedWorkItem, ticketId, oldState, state);
-
-          const ticket = workItemToTicket(updatedWorkItem, {
-            id: project.id,
-            name: project.name,
-            devOpsProject: project.name,
-            devOpsOrg: organization || '',
-            tags: [],
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          });
-
-          return NextResponse.json({ ticket });
-        }
+        workItem = await devopsService.getWorkItem(project.name, ticketId);
       } catch {
-        // Ticket not in this project, continue
+        // Ticket not in this project, continue. Only the *lookup* may fail
+        // this way — a failed update below must propagate, or a rejected
+        // transition would be reported as "Ticket not found" (issue #391).
         continue;
       }
+      if (!workItem) continue;
+
+      const oldState = workItem.fields?.['System.State'] || 'Unknown';
+
+      const updatedWorkItem = await devopsService.updateTicketState(project.name, ticketId, state);
+
+      notifyStateChange(updatedWorkItem, ticketId, oldState, state);
+
+      const ticket = workItemToTicket(updatedWorkItem, {
+        id: project.id,
+        name: project.name,
+        devOpsProject: project.name,
+        devOpsOrg: organization || '',
+        tags: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      return NextResponse.json({ ticket });
     }
 
     return NextResponse.json({ error: 'Ticket not found' }, { status: 404 });

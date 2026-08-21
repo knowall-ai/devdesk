@@ -500,6 +500,9 @@ export class AzureDevOpsService {
         'Microsoft.VSTS.TCM.ReproSteps',
         'Microsoft.VSTS.TCM.SystemInfo',
         'Custom.CustomerResponse',
+        'Microsoft.VSTS.Scheduling.CompletedWork',
+        'Microsoft.VSTS.Scheduling.RemainingWork',
+        'Microsoft.VSTS.Scheduling.OriginalEstimate',
       ].join(',');
       const workItemsResponse = await fetch(
         `${this.baseUrl}/_apis/wit/workitems?ids=${batch.join(',')}&fields=${fields}&api-version=7.0`,

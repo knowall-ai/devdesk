@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { workItemToTicket, ticketToWorkItem } from './devops';
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { workItemToTicket, ticketToWorkItem, AzureDevOpsService } from './devops';
 import type { DevOpsWorkItem } from '@/types';
 
 /** Minimal work item with only the fields workItemToTicket needs. */
@@ -91,5 +91,52 @@ describe('ticketToWorkItem — effort hours', () => {
     expect(workItem.remainingWork).toBe(0);
     expect(workItem.completedWork).toBe(0);
     expect(workItem.originalEstimate).toBe(0);
+  });
+});
+
+describe('getTickets — effort field selection', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** WIQL query first, then the batched work item fetch. */
+  function stubFetch(workItem: unknown) {
+    const calls: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        calls.push(String(url));
+        const body = String(url).includes('/wiql')
+          ? { workItems: [{ id: 6609 }] }
+          : { value: [workItem] };
+        return { ok: true, status: 200, json: async () => body } as unknown as Response;
+      })
+    );
+    return calls;
+  }
+
+  it('asks DevOps for the hours it maps, so getAllTickets can see them', async () => {
+    const calls = stubFetch(
+      makeWorkItem({
+        'Microsoft.VSTS.Scheduling.RemainingWork': 6.5,
+        'Microsoft.VSTS.Scheduling.CompletedWork': 2,
+        'Microsoft.VSTS.Scheduling.OriginalEstimate': 8,
+      })
+    );
+
+    const workItems = await new AzureDevOpsService('token', 'org').getTickets('Internal');
+
+    // The batch fetch names every field it wants; an omission here silently
+    // strips the hours from the getAllTickets path (#391 review).
+    const batchUrl = calls.find((url) => url.includes('/workitems?ids='));
+    expect(batchUrl).toBeDefined();
+    expect(batchUrl).toContain('Microsoft.VSTS.Scheduling.RemainingWork');
+    expect(batchUrl).toContain('Microsoft.VSTS.Scheduling.CompletedWork');
+    expect(batchUrl).toContain('Microsoft.VSTS.Scheduling.OriginalEstimate');
+
+    const ticket = workItemToTicket(workItems[0]);
+    expect(ticket.remainingWork).toBe(6.5);
+    expect(ticket.completedWork).toBe(2);
+    expect(ticket.originalEstimate).toBe(8);
   });
 });

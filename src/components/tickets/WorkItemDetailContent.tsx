@@ -34,9 +34,10 @@ interface WorkItemDetailContentProps {
 }
 
 const formatHours = (hours: number) => {
-  if (hours === 0) return '0';
-  if (hours < 1) return hours.toFixed(1);
-  return Math.round(hours).toString();
+  // Whole hours read cleanly as "8"; anything else keeps one decimal so a
+  // half-hour estimate isn't rounded away (StandupKanbanCard does the same).
+  if (Number.isInteger(hours)) return hours.toString();
+  return hours.toFixed(1);
 };
 
 function ResolutionField({
