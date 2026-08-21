@@ -527,7 +527,7 @@ function StandupPageContent() {
                     key={group.groupName}
                     groupName={group.groupName}
                     columns={group.columns}
-                    allowedStatesByType={standupData.allowedStatesByType}
+                    allowedStatesByProjectType={standupData.allowedStatesByProjectType}
                     onStateChange={handleStateChange}
                     onItemClick={handleItemClick}
                   />

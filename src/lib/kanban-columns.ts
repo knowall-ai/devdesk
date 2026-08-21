@@ -25,28 +25,50 @@ export function normalizeStateName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
+/** Project -> work item type -> the state names that type defines there. */
+export type AllowedStates = Record<string, Record<string, string[]>>;
+
 /**
- * Whether `workItemType` defines a state matching `columnName`.
+ * The states `workItemType` defines *in the project the card actually lives
+ * in*. Scoping by project matters: process templates are per project, so a
+ * Bug in one project can define "To Do" while a Bug in another doesn't.
+ * Reading a union across projects would offer a drop target the card's own
+ * project rejects.
  *
- * Fails open: when we have no state list for the type (state discovery
- * failed, or the type is new), the drop is allowed and the server remains
- * the authority. Blocking on absent data would break working drags.
+ * Returns undefined when we know nothing, which callers treat as "allow".
+ */
+function statesFor(
+  project: string | undefined,
+  workItemType: string | undefined,
+  allowedStates: AllowedStates | undefined
+): string[] | undefined {
+  if (!project || !workItemType) return undefined;
+  const states = allowedStates?.[project]?.[workItemType];
+  return states && states.length > 0 ? states : undefined;
+}
+
+/**
+ * Whether `workItemType` defines a state matching `columnName` in `project`.
+ *
+ * Fails open: when we have no state list for that project and type (state
+ * discovery failed, or the type is new), the drop is allowed and the server
+ * remains the authority. Blocking on absent data would break working drags.
  */
 export function canTypeEnterColumn(
+  project: string | undefined,
   workItemType: string | undefined,
   columnName: string,
-  allowedStatesByType: Record<string, string[]> | undefined
+  allowedStates: AllowedStates | undefined
 ): boolean {
-  if (!workItemType) return true;
-  const states = allowedStatesByType?.[workItemType];
-  if (!states || states.length === 0) return true;
+  const states = statesFor(project, workItemType, allowedStates);
+  if (!states) return true;
   const target = normalizeStateName(columnName);
   return states.some((state) => normalizeStateName(state) === target);
 }
 
 /**
  * Translate a display column name into the state name DevOps actually expects
- * for this work item type.
+ * for this work item type in this project.
  *
  * The column label and the state name are NOT interchangeable. The board shows
  * "To Do" while the KnowAll process defines the state as "Todo", and PATCHing
@@ -57,13 +79,13 @@ export function canTypeEnterColumn(
  * the server to have the final say.
  */
 export function resolveStateForColumn(
+  project: string | undefined,
   workItemType: string | undefined,
   columnName: string,
-  allowedStatesByType: Record<string, string[]> | undefined
+  allowedStates: AllowedStates | undefined
 ): string {
-  if (!workItemType) return columnName;
-  const states = allowedStatesByType?.[workItemType];
-  if (!states || states.length === 0) return columnName;
+  const states = statesFor(project, workItemType, allowedStates);
+  if (!states) return columnName;
   const target = normalizeStateName(columnName);
   return states.find((state) => normalizeStateName(state) === target) ?? columnName;
 }

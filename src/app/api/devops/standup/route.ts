@@ -17,12 +17,14 @@ interface StateMetadata {
   /** State name -> category, unioned across every project and work item type. */
   categories: Record<string, string>;
   /**
-   * Work item type -> the state names that type actually defines. The union in
-   * `categories` can't answer "may this card enter that column?", because
-   * states are defined per work item type: an Agile-template Bug has no
-   * "To Do" state even when a Task in the same project does (#391).
+   * Project -> work item type -> the state names that type actually defines
+   * there. The union in `categories` can't answer "may this card enter that
+   * column?", because states are defined per work item type *and* per
+   * project's process template: an Agile-template Bug has no "To Do" state
+   * even when a Task in the same project does, and a Bug in a different
+   * project may have one (#391).
    */
-  statesByType: Record<string, string[]>;
+  statesByProjectType: Record<string, Record<string, string[]>>;
 }
 
 // Per-org TTL cache + in-flight dedup for state metadata.
@@ -42,7 +44,7 @@ async function fetchStateMetadata(
   const cached = stateCategoryCacheByOrg.get(organization);
   if (cached) {
     if (Date.now() - cached.timestamp < STATE_CACHE_TTL_MS) {
-      return { categories: cached.categories, statesByType: cached.statesByType };
+      return { categories: cached.categories, statesByProjectType: cached.statesByProjectType };
     }
     // Expired — evict so the map doesn't accumulate stale per-org entries forever.
     stateCategoryCacheByOrg.delete(organization);
@@ -69,7 +71,7 @@ async function doFetchStateMetadata(
   accessToken: string,
   organization: string
 ): Promise<StateMetadata> {
-  const empty: StateMetadata = { categories: {}, statesByType: {} };
+  const empty: StateMetadata = { categories: {}, statesByProjectType: {} };
 
   // Reuse the cached project list rather than re-fetching independently
   let projects: { name: string }[] = [];
@@ -81,7 +83,7 @@ async function doFetchStateMetadata(
   if (projects.length === 0) return empty;
 
   const stateCategories: Record<string, string> = {};
-  const statesByType: Record<string, Set<string>> = {};
+  const statesByProjectType: Record<string, Record<string, Set<string>>> = {};
 
   // Fetch states from ALL projects to cover different process templates
   const projectResults = await Promise.allSettled(
@@ -97,7 +99,7 @@ async function doFetchStateMetadata(
         }
       );
 
-      if (!typesResponse.ok) return [];
+      if (!typesResponse.ok) return { project: project.name, types: [] };
 
       const typesData = await typesResponse.json();
       const types: { name: string }[] = typesData.value || [];
@@ -124,38 +126,46 @@ async function doFetchStateMetadata(
         })
       );
 
-      return stateResults
-        .filter(
-          (
-            r
-          ): r is PromiseFulfilledResult<{
-            type: string;
-            states: { name: string; category: string }[];
-          }> => r.status === 'fulfilled'
-        )
-        .map((r) => r.value);
+      return {
+        project: project.name,
+        types: stateResults
+          .filter(
+            (
+              r
+            ): r is PromiseFulfilledResult<{
+              type: string;
+              states: { name: string; category: string }[];
+            }> => r.status === 'fulfilled'
+          )
+          .map((r) => r.value),
+      };
     })
   );
 
   for (const result of projectResults) {
     if (result.status !== 'fulfilled') continue;
-    for (const { type, states } of result.value) {
+    const { project, types } = result.value;
+    for (const { type, states } of types) {
       for (const state of states) {
+        // Categories stay org-wide: they only drive column *ordering*, which
+        // is a union across templates by design.
         stateCategories[state.name] = state.category;
-        // Union across projects: the same type can carry different states in
-        // different projects. The trade-off is deliberate — this can leave a
-        // column enabled for an item whose *own* project lacks that state, in
-        // which case the PATCH fails and the user sees the real DevOps reason.
-        // That beats blocking a legitimate drop, which is the bug in #391.
-        (statesByType[type] ??= new Set()).add(state.name);
+        // Allowed states are kept per project, because a state defined only in
+        // another project's process template must not unblock a column here.
+        ((statesByProjectType[project] ??= {})[type] ??= new Set()).add(state.name);
       }
     }
   }
 
   return {
     categories: stateCategories,
-    statesByType: Object.fromEntries(
-      Object.entries(statesByType).map(([type, states]) => [type, Array.from(states)])
+    statesByProjectType: Object.fromEntries(
+      Object.entries(statesByProjectType).map(([project, byType]) => [
+        project,
+        Object.fromEntries(
+          Object.entries(byType).map(([type, states]) => [type, Array.from(states)])
+        ),
+      ])
     ),
   };
 }
@@ -229,7 +239,7 @@ export async function GET(request: NextRequest) {
 
     // Step 1: Fetch state categories dynamically from DevOps (cached + deduped)
     const devopsService = new AzureDevOpsService(session.accessToken, organization);
-    const { categories: stateCategories, statesByType } = await fetchStateMetadata(
+    const { categories: stateCategories, statesByProjectType } = await fetchStateMetadata(
       devopsService,
       session.accessToken,
       organization
@@ -346,7 +356,7 @@ export async function GET(request: NextRequest) {
       columns: displayColumns,
       // Lets the board disable drop targets a card's type can't enter, instead
       // of letting DevOps reject the PATCH and snapping the card back (#391).
-      allowedStatesByType: statesByType,
+      allowedStatesByProjectType: statesByProjectType,
       summary: {
         columnCounts,
         projectCount: projects.length,

@@ -572,14 +572,15 @@ export interface StandupData {
   /** Column definitions in display order (from DevOps state categories) */
   columns: { name: string; category: string }[];
   /**
-   * Work item type -> the DevOps state names that type defines. States are
-   * per work item type, so a display column valid for one card can be invalid
-   * for another; the board uses this to disable impossible drop targets.
-   * Unioned across projects, so a column can be enabled for an item whose own
-   * project lacks that state; the PATCH then reports the real DevOps reason.
+   * Project -> work item type -> the DevOps state names that type defines in
+   * that project. States come from the project's process template and are
+   * defined per work item type, so a display column valid for one card can be
+   * invalid for another; the board uses this to disable impossible drop
+   * targets. Keyed by project so a state that exists only in some other
+   * project's template can't unblock a column the card can't actually enter.
    * Absent when state discovery failed — treat that as "allow everything".
    */
-  allowedStatesByType?: Record<string, string[]>;
+  allowedStatesByProjectType?: Record<string, Record<string, string[]>>;
   summary: {
     columnCounts: Record<string, number>;
     projectCount: number;

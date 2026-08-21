@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
 import { toast } from 'sonner';
 import {
   DndContext,
@@ -20,7 +20,11 @@ import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { ChevronDown, ChevronRight, Info } from 'lucide-react';
 import StandupKanbanCard from './StandupKanbanCard';
 import { getColumnIcon, getColumnColor } from './columnConfig';
-import { canTypeEnterColumn, resolveStateForColumn } from '@/lib/kanban-columns';
+import {
+  canTypeEnterColumn,
+  resolveStateForColumn,
+  type AllowedStates,
+} from '@/lib/kanban-columns';
 import type { StandupColumn, StandupWorkItem } from '@/types';
 
 // Done-category columns only show items changed in the last 7 days; this hint
@@ -105,8 +109,8 @@ function DroppableColumn({
 interface KanbanGroupSectionProps {
   groupName: string;
   columns: StandupColumn[];
-  /** Work item type -> states that type defines. Omit to allow every drop. */
-  allowedStatesByType?: Record<string, string[]>;
+  /** Project -> work item type -> states that type defines there. Omit to allow every drop. */
+  allowedStatesByProjectType?: AllowedStates;
   onStateChange?: (itemId: number, targetState: string) => Promise<void>;
   onItemClick?: (item: StandupWorkItem) => void;
 }
@@ -114,7 +118,7 @@ interface KanbanGroupSectionProps {
 export default function KanbanGroupSection({
   groupName,
   columns,
-  allowedStatesByType,
+  allowedStatesByProjectType,
   onStateChange,
   onItemClick,
 }: KanbanGroupSectionProps) {
@@ -125,29 +129,32 @@ export default function KanbanGroupSection({
   const [activeId, setActiveId] = useState<number | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
 
-  // Local state for drag-and-drop reactivity, keyed by column name
-  const [localItems, setLocalItems] = useState<Record<string, StandupWorkItem[]>>(() => {
+  // What the server last told us, keyed by column name.
+  const propItems = useMemo(() => {
     const map: Record<string, StandupWorkItem[]> = {};
     for (const col of columns) {
       map[col.name] = col.items;
     }
     return map;
-  });
-
-  // Reset the optimistic board back to what the server last told us. Used both
-  // to sync after a refresh and to roll back a drag that didn't stick.
-  const syncFromProps = useCallback(() => {
-    const map: Record<string, StandupWorkItem[]> = {};
-    for (const col of columns) {
-      map[col.name] = col.items;
-    }
-    setLocalItems(map);
   }, [columns]);
 
-  // Sync with prop changes (e.g. after refresh)
-  useEffect(() => {
-    syncFromProps();
-  }, [syncFromProps]);
+  // Local copy so a drag can move cards optimistically before the server confirms.
+  const [localItems, setLocalItems] = useState<Record<string, StandupWorkItem[]>>(propItems);
+  const [syncedItems, setSyncedItems] = useState(propItems);
+
+  // Adopt new server data as it arrives. Done during render rather than in an
+  // effect: React restarts the render with the new state before painting, so
+  // the board never flashes the stale columns first.
+  if (syncedItems !== propItems) {
+    setSyncedItems(propItems);
+    setLocalItems(propItems);
+  }
+
+  // Roll the optimistic board back to the server's version after a drag that
+  // didn't stick, or one we never sent.
+  const syncFromProps = useCallback(() => {
+    setLocalItems(propItems);
+  }, [propItems]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -184,10 +191,16 @@ export default function KanbanGroupSection({
     if (!activeItem) return new Set<string>();
     return new Set(
       columnNames.filter(
-        (name) => !canTypeEnterColumn(activeItem.workItemType, name, allowedStatesByType)
+        (name) =>
+          !canTypeEnterColumn(
+            activeItem.project,
+            activeItem.workItemType,
+            name,
+            allowedStatesByProjectType
+          )
       )
     );
-  }, [activeItem, columnNames, allowedStatesByType]);
+  }, [activeItem, columnNames, allowedStatesByProjectType]);
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveId(event.active.id as number);
@@ -242,7 +255,15 @@ export default function KanbanGroupSection({
       // trips if the cached state list went stale mid-session. Say so plainly
       // rather than letting DevOps answer with a raw rule error.
       const dragged = originalCol?.items.find((i) => i.id === activeItemId);
-      if (dragged && !canTypeEnterColumn(dragged.workItemType, targetCol, allowedStatesByType)) {
+      if (
+        dragged &&
+        !canTypeEnterColumn(
+          dragged.project,
+          dragged.workItemType,
+          targetCol,
+          allowedStatesByProjectType
+        )
+      ) {
         syncFromProps();
         toast.error(`${dragged.workItemType} work items have no "${targetCol}" state`);
         return;
@@ -254,7 +275,12 @@ export default function KanbanGroupSection({
         // state "Todo" in the KnowAll process — so translate before writing.
         await onStateChange(
           activeItemId,
-          resolveStateForColumn(dragged?.workItemType, targetCol, allowedStatesByType)
+          resolveStateForColumn(
+            dragged?.project,
+            dragged?.workItemType,
+            targetCol,
+            allowedStatesByProjectType
+          )
         );
       } catch (error) {
         console.error('Failed to update state:', error);
@@ -272,7 +298,7 @@ export default function KanbanGroupSection({
         setIsUpdating(false);
       }
     },
-    [onStateChange, findColumn, columns, allowedStatesByType, syncFromProps]
+    [onStateChange, findColumn, columns, allowedStatesByProjectType, syncFromProps]
   );
 
   const handleDragCancel = useCallback(() => {
