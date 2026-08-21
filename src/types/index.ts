@@ -578,7 +578,11 @@ export interface StandupData {
    * invalid for another; the board uses this to disable impossible drop
    * targets. Keyed by project so a state that exists only in some other
    * project's template can't unblock a column the card can't actually enter.
-   * Absent when state discovery failed — treat that as "allow everything".
+   *
+   * A successful response always carries this, though it may be `{}` or be
+   * missing an entry for a given project or type when discovery came back
+   * empty for it. Treat any missing entry as "allow everything" and let the
+   * server decide — total discovery failure is a 500, not an omission here.
    */
   allowedStatesByProjectType?: Record<string, Record<string, string[]>>;
   summary: {
