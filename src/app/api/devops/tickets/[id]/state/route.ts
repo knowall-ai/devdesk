@@ -88,7 +88,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     // similar workflow errors — collapsing everything to a generic 500
     // means the UI can't tell the user *why* the drag failed (issue #391).
     if (error instanceof DevOpsApiError) {
-      const status = error.status === 400 || error.status === 409 ? error.status : 500;
+      // 400/409 are workflow rejections; 401/403/404 are auth, permission and
+      // missing-item failures the client can act on — anything else is genuinely
+      // ours to own, so it stays a 500.
+      const passThrough = [400, 401, 403, 404, 409];
+      const status = passThrough.includes(error.status) ? error.status : 500;
       return NextResponse.json({ error: error.message }, { status });
     }
     return NextResponse.json({ error: 'Failed to update ticket state' }, { status: 500 });

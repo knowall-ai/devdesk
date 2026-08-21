@@ -575,6 +575,8 @@ export interface StandupData {
    * Work item type -> the DevOps state names that type defines. States are
    * per work item type, so a display column valid for one card can be invalid
    * for another; the board uses this to disable impossible drop targets.
+   * Unioned across projects, so a column can be enabled for an item whose own
+   * project lacks that state; the PATCH then reports the real DevOps reason.
    * Absent when state discovery failed — treat that as "allow everything".
    */
   allowedStatesByType?: Record<string, string[]>;

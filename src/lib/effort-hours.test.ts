@@ -13,8 +13,8 @@ function makeWorkItem(extraFields: Record<string, unknown> = {}): DevOpsWorkItem
       'System.TeamProject': 'Internal',
       'System.CreatedBy': {
         id: 'user-1',
-        displayName: 'Akash',
-        uniqueName: 'akash@knowall.ai',
+        displayName: 'Test User',
+        uniqueName: 'test@example.com',
       },
       'System.CreatedDate': '2026-08-01T00:00:00Z',
       'System.ChangedDate': '2026-08-02T00:00:00Z',

@@ -143,7 +143,10 @@ async function doFetchStateMetadata(
       for (const state of states) {
         stateCategories[state.name] = state.category;
         // Union across projects: the same type can carry different states in
-        // different projects, and a drop is legitimate if any of them allows it.
+        // different projects. The trade-off is deliberate — this can leave a
+        // column enabled for an item whose *own* project lacks that state, in
+        // which case the PATCH fails and the user sees the real DevOps reason.
+        // That beats blocking a legitimate drop, which is the bug in #391.
         (statesByType[type] ??= new Set()).add(state.name);
       }
     }

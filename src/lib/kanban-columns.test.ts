@@ -92,7 +92,7 @@ describe('canTypeEnterColumn', () => {
     expect(canTypeEnterColumn('Issue', 'To Do', allowedStatesByType)).toBe(false);
   });
 
-  it('blocks every type from Blocked, which no template defines', () => {
+  it('blocks every type from Blocked, which this fixture leaves out', () => {
     for (const type of Object.keys(allowedStatesByType)) {
       expect(canTypeEnterColumn(type, 'Blocked', allowedStatesByType)).toBe(false);
     }
