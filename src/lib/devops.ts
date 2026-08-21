@@ -528,7 +528,12 @@ export class AzureDevOpsService {
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch work item: ${response.statusText}`);
+      // Carry the status: callers that search every project need to tell
+      // "not in this project" apart from auth, throttling and outages.
+      throw new DevOpsApiError(
+        response.status,
+        `Failed to fetch work item: ${response.statusText}`
+      );
     }
 
     return response.json();

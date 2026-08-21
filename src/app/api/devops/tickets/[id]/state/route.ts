@@ -53,11 +53,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       let workItem;
       try {
         workItem = await devopsService.getWorkItem(project.name, ticketId);
-      } catch {
-        // Ticket not in this project, continue. Only the *lookup* may fail
-        // this way — a failed update below must propagate, or a rejected
-        // transition would be reported as "Ticket not found" (issue #391).
-        continue;
+      } catch (lookupError) {
+        // Only a genuine 404 means "not in this project" — 401/429/5xx are
+        // real failures and must not be reported as a missing ticket. The
+        // update below never falls through here either, or a rejected
+        // transition would surface as "Ticket not found" (issue #391).
+        if (lookupError instanceof DevOpsApiError && lookupError.status === 404) continue;
+        throw lookupError;
       }
       if (!workItem) continue;
 
