@@ -3,6 +3,7 @@
 import { useSession } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { toast } from 'sonner';
 import Link from 'next/link';
 import { RefreshCw, FolderOpen, User } from 'lucide-react';
 import { MainLayout } from '@/components/layout';
@@ -208,7 +209,18 @@ function StandupPageContent() {
         standupCache.set(key, { data, timestamp: Date.now() });
         setStandupData(data);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load standup data');
+        const message = err instanceof Error ? err.message : 'Failed to load standup data';
+        // `error` swaps the whole board out for the error screen, which is
+        // right on first load but destructive for a refresh that happens over
+        // a board the user is already reading — a failed live-update tick
+        // would blank it. Those paths report the failure and keep the data
+        // they have, stale as it may be. The fixed toast id means a poll that
+        // keeps failing replaces its message instead of stacking up.
+        if (isAutoRefresh) {
+          toast.error(`Couldn't refresh the board: ${message}`, { id: 'kanban-refresh-error' });
+        } else {
+          setError(message);
+        }
       } finally {
         setLoading(false);
         setRefreshing(false);
