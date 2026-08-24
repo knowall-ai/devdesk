@@ -9,6 +9,26 @@ import { DEFAULT_ZAP_PRESETS } from '@/types';
 import Avatar from '../common/Avatar';
 import { lightningUri } from '@/lib/lnurl';
 
+/** Bounds for a custom zap amount, in whole sats. */
+const MIN_ZAP_SATS = 1;
+const MAX_ZAP_SATS = 1_000_000;
+
+/**
+ * Parse the free-text custom amount.
+ *
+ * The input carries min/max, but the browser only enforces those on form
+ * submission and this dialog never submits one — so "1.5" reached
+ * `parseInt` and became 1, and a value above the cap went through as typed.
+ * Whole sats within the advertised range only; anything else is 0, which
+ * every caller already treats as "nothing to send".
+ */
+function parseZapAmount(raw: string): number {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) return 0;
+  const value = Number(trimmed);
+  return value >= MIN_ZAP_SATS && value <= MAX_ZAP_SATS ? value : 0;
+}
+
 interface ZapDialogProps {
   isOpen: boolean;
   onClose: () => void;
@@ -46,7 +66,7 @@ function ZapDialogContent({
   const [invoiceLoading, setInvoiceLoading] = useState(false);
   const [invoiceError, setInvoiceError] = useState<string | null>(null);
 
-  const actualAmount = isCustom ? parseInt(customAmount) || 0 : selectedAmount;
+  const actualAmount = isCustom ? parseZapAmount(customAmount) : selectedAmount;
 
   // Fetch actual BOLT11 invoice from LNURL-pay endpoint
   const fetchInvoice = useCallback(async () => {
@@ -332,8 +352,8 @@ function ZapDialogContent({
                 }}
                 onFocus={() => setIsCustom(true)}
                 className="input flex-1"
-                min="1"
-                max="1000000"
+                min={MIN_ZAP_SATS}
+                max={MAX_ZAP_SATS}
               />
               <span
                 className="flex items-center px-3 text-sm"
