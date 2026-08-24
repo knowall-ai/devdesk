@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { toast } from 'sonner';
 import Link from 'next/link';
-import { RefreshCw, FolderOpen, User } from 'lucide-react';
+import { RefreshCw, FolderOpen, User, Radio } from 'lucide-react';
 import { MainLayout } from '@/components/layout';
 import { LoadingSpinner } from '@/components/common';
 import { StandupSummaryCards, KanbanGroupSection } from '@/components/standup';
@@ -576,20 +576,31 @@ function StandupPageContent() {
                 Current Sprint
               </label>
 
-              {/* Live update toggle */}
-              <label
-                className="flex cursor-pointer items-center gap-2 text-xs"
-                style={{ color: 'var(--text-muted)' }}
-                title={`Refresh the board automatically every ${Math.round(LIVE_UPDATE_INTERVAL_MS / 1000)} seconds while this tab is visible`}
+              {/* Live update toggle. A broadcast icon that pulses while polling
+                  reads as "live" at a glance in a way a checkbox doesn't, and it
+                  doubles as the status indicator — if it isn't pulsing, the board
+                  isn't refreshing itself. role="switch" keeps the semantics a
+                  checkbox gave us for free. */}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={liveUpdate}
+                onClick={() => setLiveUpdate((on) => !on)}
+                className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  liveUpdate
+                    ? 'border-transparent bg-[var(--primary)] text-white'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
+                }`}
+                style={liveUpdate ? undefined : { borderColor: 'var(--border)' }}
+                title={
+                  liveUpdate
+                    ? `Live: refreshing every ${Math.round(LIVE_UPDATE_INTERVAL_MS / 1000)} seconds while this tab is visible`
+                    : `Refresh the board automatically every ${Math.round(LIVE_UPDATE_INTERVAL_MS / 1000)} seconds while this tab is visible`
+                }
               >
-                <input
-                  type="checkbox"
-                  checked={liveUpdate}
-                  onChange={(e) => setLiveUpdate(e.target.checked)}
-                  className="accent-[var(--primary)]"
-                />
+                <Radio size={14} className={liveUpdate ? 'animate-pulse' : ''} />
                 Live update
-              </label>
+              </button>
 
               {/* Manual refresh */}
               <button
