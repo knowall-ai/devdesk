@@ -218,7 +218,11 @@ function StandupPageContent() {
       const response = await devOpsPatch(`/api/devops/tickets/${itemId}/state`, body);
 
       if (!response.ok) {
-        throw new Error('Failed to update state');
+        // Pull the upstream reason out of the route response so callers
+        // (KanbanBoard drag, dialog state dropdown) can show the actual
+        // workflow-rule message — not just "Failed to update state".
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to update state');
       }
 
       fetchStandupData(true, true);
@@ -523,6 +527,7 @@ function StandupPageContent() {
                     key={group.groupName}
                     groupName={group.groupName}
                     columns={group.columns}
+                    allowedStatesByProjectType={standupData.allowedStatesByProjectType}
                     onStateChange={handleStateChange}
                     onItemClick={handleItemClick}
                   />
