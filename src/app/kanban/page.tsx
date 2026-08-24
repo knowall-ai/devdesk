@@ -115,6 +115,11 @@ function StandupPageContent() {
   const currentSprintOnly = searchParams.get('sprint') === 'true';
 
   const [standupData, setStandupData] = useState<StandupData | null>(null);
+  // Whether there is a board on screen right now, readable from inside
+  // `fetchStandupData` without putting `standupData` in its dependency list —
+  // which would rebuild the callback on every poll and re-subscribe the
+  // live-update effect along with it.
+  const hasBoardRef = useRef(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -162,6 +167,7 @@ function StandupPageContent() {
       if (!forceRefresh) {
         const cached = standupCache.get(key);
         if (cached && Date.now() - cached.timestamp < STANDUP_CACHE_TTL_MS) {
+          hasBoardRef.current = true;
           setStandupData(cached.data);
           setLoading(false);
           setRefreshing(false);
@@ -207,6 +213,7 @@ function StandupPageContent() {
           standupInFlight.delete(key);
         }
         standupCache.set(key, { data, timestamp: Date.now() });
+        hasBoardRef.current = true;
         setStandupData(data);
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Failed to load standup data';
@@ -216,7 +223,11 @@ function StandupPageContent() {
         // would blank it. Those paths report the failure and keep the data
         // they have, stale as it may be. The fixed toast id means a poll that
         // keeps failing replaces its message instead of stacking up.
-        if (isAutoRefresh) {
+        // The Refresh button is in the header, which renders on the error
+        // screen too — so "is this a background refresh?" isn't enough on its
+        // own. Without a board to fall back on, the error state has to stand
+        // or the page is left blank with no way back.
+        if (isAutoRefresh && hasBoardRef.current) {
           toast.error(`Couldn't refresh the board: ${message}`, { id: 'kanban-refresh-error' });
         } else {
           setError(message);
