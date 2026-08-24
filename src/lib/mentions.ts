@@ -25,6 +25,17 @@ const NAME_TOKEN = String.raw`[\w](?:[\w.\-']*[\w])?`;
 const MENTION_PATTERN = String.raw`@${NAME_TOKEN}(?:[ ](?=[A-Z])${NAME_TOKEN}){0,2}`;
 
 /**
+ * What must sit in front of an `@` for it to start a mention: the start of the
+ * string, whitespace, or a tag boundary — so "jane@example.com" isn't one.
+ * Shared by both functions; if they disagree, a name can highlight without
+ * being notified.
+ */
+const MENTION_PREFIX = String.raw`(^|[\s>])`;
+
+/** Class applied to the span wrapping a highlighted mention. */
+export const MENTION_CLASS = 'mention';
+
+/**
  * Highlights @mentions in HTML content by wrapping them in span elements
  * Matches @username patterns where username can contain letters, numbers, spaces, and dots
  * @param html - The HTML content to process
@@ -33,14 +44,12 @@ const MENTION_PATTERN = String.raw`@${NAME_TOKEN}(?:[ ](?=[A-Z])${NAME_TOKEN}){0
 export function highlightMentions(html: string): string {
   if (!html) return html;
 
-  // Anchored to the start of the string or to whitespace / a tag boundary, so
-  // an email address or a mid-word @ isn't treated as a mention.
-  const mentionRegex = new RegExp(String.raw`(^|[\s>])(${MENTION_PATTERN})`, 'g');
+  const mentionRegex = new RegExp(String.raw`${MENTION_PREFIX}(${MENTION_PATTERN})`, 'g');
 
   return html.replace(mentionRegex, (_match, prefix, mention) => {
     // Escape HTML in the mention text for safety
     const escapedMention = escapeHtml(mention);
-    return `${prefix}<span class="mention">${escapedMention}</span>`;
+    return `${prefix}<span class="${MENTION_CLASS}">${escapedMention}</span>`;
   });
 }
 
@@ -66,14 +75,15 @@ function escapeHtml(text: string): string {
 export function extractMentions(text: string): string[] {
   if (!text) return [];
 
-  // Same boundary rule as highlightMentions — see MENTION_PATTERN. Keeping
-  // them in step matters: what gets highlighted is what gets notified.
-  const mentionRegex = new RegExp(String.raw`(?<!\S)${MENTION_PATTERN}`, 'g');
+  // Exactly the boundary highlightMentions uses. It previously accepted only
+  // start-of-string or whitespace, so "<p>@Jane Doe hi</p>" highlighted the
+  // name but extracted nothing and the mentioned user was never notified.
+  const mentionRegex = new RegExp(String.raw`${MENTION_PREFIX}(${MENTION_PATTERN})`, 'g');
   const mentions: string[] = [];
   let match;
 
   while ((match = mentionRegex.exec(text)) !== null) {
-    mentions.push(match[0].slice(1).trim());
+    mentions.push(match[2].slice(1));
   }
 
   return [...new Set(mentions)]; // Remove duplicates

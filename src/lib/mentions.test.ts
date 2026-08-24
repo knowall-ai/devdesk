@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { highlightMentions, extractMentions } from './mentions';
+import { highlightMentions, extractMentions, MENTION_CLASS } from './mentions';
 
 /** The span the comment view renders around a mention. */
-const span = (name: string) => `<span class="mention">@${name}</span>`;
+const span = (name: string) => `<span class="${MENTION_CLASS}">@${name}</span>`;
 
 describe('highlightMentions — where a mention ends', () => {
   // MentionInput inserts a bare "@Display Name " with no delimiter, so the
@@ -87,6 +87,13 @@ describe('extractMentions', () => {
 
   it('returns nothing for empty input', () => {
     expect(extractMentions('')).toEqual([]);
+  });
+
+  // The two functions have to accept the same boundaries, or a name can light
+  // up in the comment while its owner is never notified.
+  it('extracts after a tag boundary, like highlightMentions does', () => {
+    expect(extractMentions('<p>@Jane Doe hi</p>')).toEqual(['Jane Doe']);
+    expect(extractMentions('<b>cc</b> @Bob Smith')).toEqual(['Bob Smith']);
   });
 
   it('agrees with what highlightMentions marks up', () => {
