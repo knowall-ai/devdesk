@@ -209,9 +209,12 @@ export function ticketToWorkItem(ticket: Ticket): WorkItem {
     project: ticket.project,
     createdAt: ticket.createdAt,
     updatedAt: ticket.updatedAt,
-    completedWork: 0,
-    remainingWork: 0,
-    originalEstimate: 0,
+    // Carry the real hours through. These used to be hardcoded to 0, which
+    // meant the dialog on /kanban and /tickets could never show effort at all
+    // — the fields were fetched, mapped away, and then reinvented as zeros.
+    completedWork: ticket.completedWork ?? 0,
+    remainingWork: ticket.remainingWork ?? 0,
+    originalEstimate: ticket.originalEstimate ?? 0,
     assignee: ticket.assignee,
     devOpsUrl: ticket.devOpsUrl,
     tags: ticket.tags,
@@ -257,8 +260,28 @@ export function workItemToTicket(workItem: DevOpsWorkItem, organization?: Organi
       workItem._links?.html?.href ||
       `${DEVOPS_BASE_URL}/${fields['System.TeamProject']}/_workitems/edit/${workItem.id}`,
     project: fields['System.TeamProject'],
+    // Effort hours. Left undefined when the field isn't set on the work item so
+    // callers can tell "not tracked" from "tracked as zero"; the UI renders
+    // either as 0h.
+    completedWork: readEffortField(fields, 'Microsoft.VSTS.Scheduling.CompletedWork'),
+    remainingWork: readEffortField(fields, 'Microsoft.VSTS.Scheduling.RemainingWork'),
+    originalEstimate: readEffortField(fields, 'Microsoft.VSTS.Scheduling.OriginalEstimate'),
     comments: [],
   };
+}
+
+/**
+ * Read a scheduling/effort field as a number.
+ *
+ * DevOps omits these fields entirely when they've never been set, and can
+ * return them as strings on some templates, so coerce and reject anything
+ * non-finite rather than letting NaN reach the UI.
+ */
+function readEffortField(fields: Record<string, unknown>, fieldRef: string): number | undefined {
+  const raw = fields[fieldRef];
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
 }
 
 // Thrown by AzureDevOpsService methods when the upstream DevOps API returns
@@ -477,6 +500,9 @@ export class AzureDevOpsService {
         'Microsoft.VSTS.TCM.ReproSteps',
         'Microsoft.VSTS.TCM.SystemInfo',
         'Custom.CustomerResponse',
+        'Microsoft.VSTS.Scheduling.CompletedWork',
+        'Microsoft.VSTS.Scheduling.RemainingWork',
+        'Microsoft.VSTS.Scheduling.OriginalEstimate',
       ].join(',');
       const workItemsResponse = await fetch(
         `${this.baseUrl}/_apis/wit/workitems?ids=${batch.join(',')}&fields=${fields}&api-version=7.0`,
@@ -502,7 +528,12 @@ export class AzureDevOpsService {
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch work item: ${response.statusText}`);
+      // Carry the status: callers that search every project need to tell
+      // "not in this project" apart from auth, throttling and outages.
+      throw new DevOpsApiError(
+        response.status,
+        `Failed to fetch work item: ${response.statusText}`
+      );
     }
 
     return response.json();
@@ -1273,7 +1304,25 @@ export class AzureDevOpsService {
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to update work item: ${response.statusText}`);
+      // DevOps returns a structured error body for blocked transitions
+      // ("TF401320: Rule Error… transition not allowed"). Surface that so
+      // the route can pass through a clear, user-facing reason instead of
+      // collapsing it to a bare status code (issue #391).
+      let detail = response.statusText;
+      try {
+        const body = await response.text();
+        if (body) {
+          try {
+            const parsed = JSON.parse(body) as { message?: string };
+            if (parsed.message) detail = parsed.message;
+          } catch {
+            detail = body.slice(0, 500);
+          }
+        }
+      } catch {
+        // Body read failure — keep the status-text fallback above.
+      }
+      throw new DevOpsApiError(response.status, `Failed to update work item state: ${detail}`);
     }
 
     return response.json();
