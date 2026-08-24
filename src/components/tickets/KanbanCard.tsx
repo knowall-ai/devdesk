@@ -139,10 +139,15 @@ export default function KanbanCard({
       {...(readOnly ? {} : attributes)}
       {...(readOnly ? {} : listeners)}
       className={`kanban-card ${isDragging ? 'kanban-card-dragging' : ''} ${hasUnrecognizedState ? 'kanban-card-unrecognized' : ''}`}
+      // Card-level tooltip so hovering anywhere on the card shows the full
+      // work item title (the <h4> truncates with line-clamp-2). When the
+      // card is in an unrecognized state, the state warning takes priority.
+      // Specific child controls (e.g. the Zap button) keep their own title
+      // and override locally on hover.
       title={
         hasUnrecognizedState
           ? `State "${getItemState(item)}" is not a recognized Kanban column`
-          : undefined
+          : item.title
       }
     >
       {onItemClick ? (

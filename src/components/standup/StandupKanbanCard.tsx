@@ -104,6 +104,11 @@ export default function StandupKanbanCard({ item, isDragging, onClick }: Standup
       {...attributes}
       {...listeners}
       className={`kanban-card ${isDragging ? 'kanban-card-dragging' : ''}`}
+      // Card-level tooltip so hovering anywhere on the card shows the full
+      // work item title (the <h4> truncates with line-clamp-2). Child
+      // elements with their own title (remaining effort, project) override
+      // locally when hovered.
+      title={item.title}
     >
       {onClick ? (
         <button
