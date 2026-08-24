@@ -123,6 +123,11 @@ function StandupPageContent() {
   // board still rendered is the *previous* one, and treating it as a fallback
   // would leave the user reading data for a filter they've moved off.
   const loadedKeyRef = useRef<string | null>(null);
+  // Monotonic request id for the board, mirroring ticketFetchSeqRef below.
+  // Switch org while a fetch is in flight and the old one can still resolve
+  // last; without this it would commit its data, and its loading/error state,
+  // over the board the user actually asked for.
+  const boardFetchSeqRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -165,6 +170,9 @@ function StandupPageContent() {
       }
 
       const key = cacheKey(selectedOrganization.accountName, currentSprintOnly);
+      const mySeq = ++boardFetchSeqRef.current;
+      /** False once a later call has started; nothing stale may commit then. */
+      const isCurrent = () => mySeq === boardFetchSeqRef.current;
 
       // Serve fresh cached data instantly (back-navigation case)
       if (!forceRefresh) {
@@ -215,7 +223,10 @@ function StandupPageContent() {
         } finally {
           standupInFlight.delete(key);
         }
+        // Cache regardless — the data is valid for its key even if we've since
+        // moved on, and a later switch back should get the benefit of it.
         standupCache.set(key, { data, timestamp: Date.now() });
+        if (!isCurrent()) return;
         loadedKeyRef.current = key;
         setStandupData(data);
       } catch (err) {
@@ -232,14 +243,18 @@ function StandupPageContent() {
         // board is for the same key; with nothing to fall back on, or with a
         // board belonging to a filter the user has moved off, the error state
         // has to stand or the page lies or goes blank with no way back.
+        if (!isCurrent()) return;
         if (isAutoRefresh && loadedKeyRef.current === key) {
           toast.error(`Couldn't refresh the board: ${message}`, { id: 'kanban-refresh-error' });
         } else {
           setError(message);
         }
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        // A superseded request must not clear the spinner the current one set.
+        if (isCurrent()) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [
