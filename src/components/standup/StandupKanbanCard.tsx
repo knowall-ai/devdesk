@@ -35,12 +35,11 @@ export default function StandupKanbanCard({ item, isDragging, onClick }: Standup
 
   const typeColor = typeColors[item.workItemType] || 'var(--text-muted)';
 
-  const hasRemainingWork = typeof item.remainingWork === 'number' && item.remainingWork > 0;
-  const remainingLabel = hasRemainingWork
-    ? Number.isInteger(item.remainingWork)
-      ? `${item.remainingWork}h`
-      : `${item.remainingWork!.toFixed(1)}h`
-    : null;
+  // Always show remaining effort, including when the field is unset — "0h" is a
+  // reading, whereas a missing badge is indistinguishable from "not estimated"
+  // and made the number look absent on every card (#6609).
+  const remaining = typeof item.remainingWork === 'number' ? item.remainingWork : 0;
+  const remainingLabel = Number.isInteger(remaining) ? `${remaining}h` : `${remaining.toFixed(1)}h`;
 
   const cardBody = (
     <>
@@ -58,15 +57,13 @@ export default function StandupKanbanCard({ item, isDragging, onClick }: Standup
           <span className="text-xs text-[var(--text-muted)]">#{item.id}</span>
         </div>
         <div className="flex items-center gap-1.5">
-          {remainingLabel && (
-            <span
-              className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-muted)]"
-              aria-label={`Remaining effort: ${remainingLabel}`}
-              title={`Remaining effort: ${remainingLabel}`}
-            >
-              {remainingLabel}
-            </span>
-          )}
+          <span
+            className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-muted)]"
+            aria-label={`Remaining effort: ${remainingLabel}`}
+            title={`Remaining effort: ${remainingLabel}`}
+          >
+            {remainingLabel}
+          </span>
           <PriorityIndicator priority={item.priority} />
         </div>
       </div>
