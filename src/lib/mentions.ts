@@ -3,6 +3,28 @@
  */
 
 /**
+ * One name token: starts and ends with a word character, and may carry dots,
+ * hyphens or apostrophes inside — "Jane.Smith", "O'Neill", "Al-Rashid".
+ */
+const NAME_TOKEN = String.raw`[\w](?:[\w.\-']*[\w])?`;
+
+/**
+ * A mention is `@` plus a name token, then at most two further tokens that
+ * each begin with a capital.
+ *
+ * The capital is what ends the mention. `MentionInput` inserts a bare
+ * `@Display Name ` with no delimiter after it, so nothing in the stored text
+ * marks where the name stops — matching spaces greedily made
+ * "@Jane Doe please review this" highlight the whole sentence. Requiring the
+ * continuation to look like part of a name stops at the first ordinary word.
+ *
+ * The cost is a lowercase surname ("@jane doe") highlighting only "@jane",
+ * which is the safer way to be wrong: too little highlight, never a
+ * swallowed sentence.
+ */
+const MENTION_PATTERN = String.raw`@${NAME_TOKEN}(?:[ ](?=[A-Z])${NAME_TOKEN}){0,2}`;
+
+/**
  * Highlights @mentions in HTML content by wrapping them in span elements
  * Matches @username patterns where username can contain letters, numbers, spaces, and dots
  * @param html - The HTML content to process
@@ -11,12 +33,9 @@
 export function highlightMentions(html: string): string {
   if (!html) return html;
 
-  // Match @mentions that:
-  // - Start with @ preceded by whitespace or start of string
-  // - Followed by a name (letters, numbers, spaces, dots, hyphens)
-  // - Name continues until we hit certain delimiters or end
-  // This regex handles display names like "John Doe" or "Jane.Smith"
-  const mentionRegex = /(^|[\s>])(@[\w][\w\s.\-']*[\w]|@[\w])/g;
+  // Anchored to the start of the string or to whitespace / a tag boundary, so
+  // an email address or a mid-word @ isn't treated as a mention.
+  const mentionRegex = new RegExp(String.raw`(^|[\s>])(${MENTION_PATTERN})`, 'g');
 
   return html.replace(mentionRegex, (_match, prefix, mention) => {
     // Escape HTML in the mention text for safety
@@ -47,12 +66,14 @@ function escapeHtml(text: string): string {
 export function extractMentions(text: string): string[] {
   if (!text) return [];
 
-  const mentionRegex = /(?<!\S)@([\w][\w\s.\-']*[\w]|[\w])/g;
+  // Same boundary rule as highlightMentions — see MENTION_PATTERN. Keeping
+  // them in step matters: what gets highlighted is what gets notified.
+  const mentionRegex = new RegExp(String.raw`(?<!\S)${MENTION_PATTERN}`, 'g');
   const mentions: string[] = [];
   let match;
 
   while ((match = mentionRegex.exec(text)) !== null) {
-    mentions.push(match[1].trim());
+    mentions.push(match[0].slice(1).trim());
   }
 
   return [...new Set(mentions)]; // Remove duplicates
