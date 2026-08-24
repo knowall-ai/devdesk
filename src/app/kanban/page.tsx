@@ -118,13 +118,14 @@ function StandupPageContent() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [liveUpdate, setLiveUpdate] = useState(false);
-  const liveUpdateRef = useRef(liveUpdate);
-  liveUpdateRef.current = liveUpdate;
-  // Tracks whether we've finished reading the persisted value from
-  // localStorage. The persist effect waits on this so its initial-mount run
-  // (with the default `false`) can't overwrite a stored `'true'` before the
-  // restore effect has had a chance to apply it.
-  const didHydrateRef = useRef(false);
+  // Whether we've finished reading the persisted value from localStorage. This
+  // is state rather than a ref on purpose: a ref is set synchronously, so the
+  // persist effect would see "hydrated" in the same flush while `liveUpdate`
+  // was still the default `false` and write `'false'` over a stored `'true'` —
+  // briefly, but long enough to emit a wrong `storage` event to other tabs.
+  // As state it commits together with `setLiveUpdate` below, so the first
+  // persist run already sees the restored value.
+  const [hydrated, setHydrated] = useState(false);
 
   // Restore the user's last "Live update" choice on mount so they don't have
   // to re-enable it every visit. Done in an effect to keep SSR stable.
@@ -136,7 +137,7 @@ function StandupPageContent() {
     } catch {
       // localStorage may throw in private/sandboxed contexts — ignore
     }
-    didHydrateRef.current = true;
+    setHydrated(true);
   }, []);
 
   // Detail dialog state — clicking a card fetches the full ticket and
@@ -238,10 +239,11 @@ function StandupPageContent() {
 
     let intervalId: ReturnType<typeof setInterval> | null = null;
 
+    // No need to re-check the toggle in here: this effect only runs while
+    // `liveUpdate` is true and its cleanup tears the timer down the moment
+    // it flips, so reaching this point already means live update is on.
     const tick = () => {
-      if (liveUpdateRef.current) {
-        fetchStandupData(true, true);
-      }
+      fetchStandupData(true, true);
     };
 
     const startInterval = () => {
@@ -258,7 +260,6 @@ function StandupPageContent() {
     };
 
     const onVisibilityChange = () => {
-      if (!liveUpdateRef.current) return;
       if (document.visibilityState === 'visible') {
         fetchStandupData(true, true);
         startInterval();
@@ -282,13 +283,13 @@ function StandupPageContent() {
   // after the restore effect has hydrated the value, so we don't briefly
   // overwrite a stored `'true'` with the initial `false`.
   useEffect(() => {
-    if (!didHydrateRef.current) return;
+    if (!hydrated) return;
     try {
       window.localStorage.setItem(LIVE_UPDATE_STORAGE_KEY, liveUpdate ? 'true' : 'false');
     } catch {
       // ignore — non-fatal
     }
-  }, [liveUpdate]);
+  }, [hydrated, liveUpdate]);
 
   // Generic state-change. Pass `project` when known to avoid an
   // expensive cross-project scan on the server.
