@@ -1316,7 +1316,11 @@ export class AzureDevOpsService {
             const parsed = JSON.parse(body) as { message?: string };
             if (parsed.message) detail = parsed.message;
           } catch {
-            detail = body.slice(0, 500);
+            // Not JSON. DevOps can answer with an HTML error page here, and
+            // this string ends up in a user-facing toast — so take the body
+            // only when it reads like a plain message, and keep it short.
+            const text = body.replace(/\s+/g, ' ').trim();
+            if (text && !/[<>]/.test(text)) detail = text.slice(0, 200);
           }
         }
       } catch {
