@@ -307,8 +307,16 @@ export class DevOpsApiError extends Error {
  */
 export function isRemovedForEveryType(
   stateCategories: Record<string, string>,
-  categoriesByProjectType?: Record<string, Record<string, Record<string, string>>>
+  categoriesByProjectType?: Record<string, Record<string, Record<string, string>>>,
+  discoveryComplete = true
 ): Set<string> {
+  const hasPerType = Object.keys(categoriesByProjectType ?? {}).length > 0;
+
+  // Excluding a name from the query is unrecoverable — items never fetched
+  // can't be filtered back in. A partial picture is not agreement, so nothing
+  // is excluded and every candidate goes to the per-item check instead.
+  if (hasPerType && !discoveryComplete) return new Set<string>();
+
   const categoriesSeen = new Map<string, Set<string>>();
 
   for (const byType of Object.values(categoriesByProjectType ?? {})) {
@@ -345,14 +353,23 @@ export function isRemovedItem(
   const state = fields['System.State'] as string | undefined;
   if (!state) return false;
 
+  // With no per-type data at all, the flat map is all there is — the
+  // pre-#277 behaviour.
+  if (Object.keys(categoriesByProjectType ?? {}).length === 0) {
+    return stateCategories[state] === 'Removed';
+  }
+
   const project = fields['System.TeamProject'] as string | undefined;
   const type = fields['System.WorkItemType'] as string | undefined;
-
   const perType = project && type ? categoriesByProjectType?.[project]?.[type]?.[state] : undefined;
 
-  // Fail open: with no per-type answer, defer to the flat map rather than
-  // hiding an item we can't classify.
-  return (perType ?? stateCategories[state]) === 'Removed';
+  // Detailed data exists but says nothing about this item — its project or
+  // type is missing, or discovery never reached them. Keep it: the flat map is
+  // exactly the lossy answer this filter exists to avoid, and showing one
+  // stale item beats hiding a live one.
+  if (perType === undefined) return false;
+
+  return perType === 'Removed';
 }
 
 export class AzureDevOpsService {
@@ -2584,7 +2601,9 @@ export class AzureDevOpsService {
      * is absent (state discovery failed) the flat `stateCategories` map is
      * used on its own, which is what happened before #277.
      */
-    categoriesByProjectType?: Record<string, Record<string, Record<string, string>>>
+    categoriesByProjectType?: Record<string, Record<string, Record<string, string>>>,
+    /** False when part of the org's type/state discovery failed. */
+    discoveryComplete = true
   ): Promise<{ items: DevOpsWorkItem[] }> {
     // Recently-done window: 7 days ending on the target date (inclusive).
     // This matches the "recently-solved" view elsewhere in the app and ensures
@@ -2611,7 +2630,11 @@ export class AzureDevOpsService {
     // only when every type that defines it agrees it is Removed. Anything
     // ambiguous is fetched and then filtered per item below, which is the only
     // place the item's own type is known.
-    const removedOnly = isRemovedForEveryType(stateCategories, categoriesByProjectType);
+    const removedOnly = isRemovedForEveryType(
+      stateCategories,
+      categoriesByProjectType,
+      discoveryComplete
+    );
 
     const doneStates: string[] = [];
     const activeStates: string[] = [];

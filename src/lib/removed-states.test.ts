@@ -48,6 +48,21 @@ describe('isRemovedForEveryType', () => {
     expect(isRemovedForEveryType({ Removed: 'Removed' }, undefined).has('Removed')).toBe(true);
     expect(isRemovedForEveryType({ Removed: 'Removed' }, {}).has('Removed')).toBe(true);
   });
+
+  // Excluding a name from the query is unrecoverable: an item never fetched
+  // can't be filtered back in by isRemovedItem. So a partial discovery must
+  // not be mistaken for every type agreeing.
+  it('excludes nothing when discovery was only partial', () => {
+    const agreed = {
+      Internal: { Task: { Removed: 'Removed' }, Bug: { Removed: 'Removed' } },
+    };
+    expect(isRemovedForEveryType({ Removed: 'Removed' }, agreed, true).has('Removed')).toBe(true);
+    expect(isRemovedForEveryType({ Removed: 'Removed' }, agreed, false).has('Removed')).toBe(false);
+  });
+
+  it('still uses the flat map on partial discovery when no per-type data exists', () => {
+    expect(isRemovedForEveryType({ Removed: 'Removed' }, {}, false).has('Removed')).toBe(true);
+  });
 });
 
 describe('isRemovedItem', () => {
@@ -65,9 +80,20 @@ describe('isRemovedItem', () => {
     expect(isRemovedItem(workItem('Internal', 'Task', 'Active'), flat, MIXED)).toBe(false);
   });
 
-  it('falls back to the flat map for an unknown project or type', () => {
-    expect(isRemovedItem(workItem('Other', 'Task', 'Removed'), flat, MIXED)).toBe(true);
-    expect(isRemovedItem(workItem('Internal', 'Epic', 'Removed'), flat, MIXED)).toBe(true);
+  // Detailed data exists but doesn't cover this item. The flat map is exactly
+  // the lossy answer the filter exists to avoid, so the item is kept.
+  it('keeps an item its per-type data says nothing about', () => {
+    expect(isRemovedItem(workItem('Other', 'Task', 'Removed'), flat, MIXED)).toBe(false);
+    expect(isRemovedItem(workItem('Internal', 'Epic', 'Removed'), flat, MIXED)).toBe(false);
+  });
+
+  it('keeps an item with missing project or type metadata', () => {
+    expect(isRemovedItem(workItem('', '', 'Removed'), flat, MIXED)).toBe(false);
+  });
+
+  it('uses the flat map only when there is no per-type data at all', () => {
+    expect(isRemovedItem(workItem('Internal', 'Task', 'Removed'), flat, {})).toBe(true);
+    expect(isRemovedItem(workItem('Internal', 'Task', 'Removed'), flat, undefined)).toBe(true);
   });
 
   it('keeps an item with no state rather than hiding it', () => {

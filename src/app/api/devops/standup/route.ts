@@ -35,6 +35,16 @@ interface StateMetadata {
    * for deciding whether a given item is Removed — see `getStandupData` (#277).
    */
   categoriesByProjectType: Record<string, Record<string, Record<string, string>>>;
+  /**
+   * False when any project's type list or any type's state list failed to
+   * load, so `categoriesByProjectType` describes only part of the org.
+   *
+   * It matters because the two halves of the Removed filter fail in opposite
+   * directions. Dropping a state name from the WIQL query is unrecoverable —
+   * items never fetched can't be filtered back in — so a partial picture must
+   * not be treated as agreement that a name is Removed everywhere (#277).
+   */
+  discoveryComplete: boolean;
 }
 
 // Per-org TTL cache + in-flight dedup for state metadata.
@@ -58,6 +68,7 @@ async function fetchStateMetadata(
         categories: cached.categories,
         statesByProjectType: cached.statesByProjectType,
         categoriesByProjectType: cached.categoriesByProjectType,
+        discoveryComplete: cached.discoveryComplete,
       };
     }
     // Expired — evict so the map doesn't accumulate stale per-org entries forever.
@@ -89,6 +100,7 @@ async function doFetchStateMetadata(
     categories: {},
     statesByProjectType: {},
     categoriesByProjectType: {},
+    discoveryComplete: false,
   };
 
   // Reuse the cached project list rather than re-fetching independently
@@ -118,7 +130,7 @@ async function doFetchStateMetadata(
         }
       );
 
-      if (!typesResponse.ok) return { project: project.name, types: [] };
+      if (!typesResponse.ok) return { project: project.name, types: [], complete: false };
 
       const typesData = await typesResponse.json();
       const types: { name: string }[] = typesData.value || [];
@@ -136,34 +148,44 @@ async function doFetchStateMetadata(
             }
           );
 
-          if (!statesResponse.ok) return { type: witType.name, states: [] };
+          if (!statesResponse.ok) return { type: witType.name, states: [], complete: false };
           const statesData = await statesResponse.json();
           return {
             type: witType.name,
             states: (statesData.value || []) as { name: string; category: string }[],
+            complete: true,
           };
         })
       );
 
+      const settled = stateResults.filter(
+        (
+          r
+        ): r is PromiseFulfilledResult<{
+          type: string;
+          states: { name: string; category: string }[];
+          complete: boolean;
+        }> => r.status === 'fulfilled'
+      );
+
       return {
         project: project.name,
-        types: stateResults
-          .filter(
-            (
-              r
-            ): r is PromiseFulfilledResult<{
-              type: string;
-              states: { name: string; category: string }[];
-            }> => r.status === 'fulfilled'
-          )
-          .map((r) => r.value),
+        types: settled.map((r) => r.value),
+        // A rejected request, or one that answered non-OK, leaves this
+        // project's picture incomplete.
+        complete: settled.length === stateResults.length && settled.every((r) => r.value.complete),
       };
     })
   );
 
+  let discoveryComplete = true;
   for (const result of projectResults) {
-    if (result.status !== 'fulfilled') continue;
-    const { project, types } = result.value;
+    if (result.status !== 'fulfilled') {
+      discoveryComplete = false;
+      continue;
+    }
+    const { project, types, complete } = result.value;
+    if (!complete) discoveryComplete = false;
     for (const { type, states } of types) {
       for (const state of states) {
         // Categories stay org-wide here: they only drive column *ordering*,
@@ -191,6 +213,7 @@ async function doFetchStateMetadata(
       ])
     ),
     categoriesByProjectType,
+    discoveryComplete,
   };
 }
 
@@ -267,6 +290,7 @@ export async function GET(request: NextRequest) {
       categories: stateCategories,
       statesByProjectType,
       categoriesByProjectType,
+      discoveryComplete,
     } = await fetchStateMetadata(devopsService, session.accessToken, organization);
 
     if (Object.keys(stateCategories).length === 0) {
@@ -277,7 +301,8 @@ export async function GET(request: NextRequest) {
     const { items } = await devopsService.getStandupData(
       targetDate,
       stateCategories,
-      categoriesByProjectType
+      categoriesByProjectType,
+      discoveryComplete
     );
 
     // Step 2b: If currentSprintOnly, fetch current iterations and filter
