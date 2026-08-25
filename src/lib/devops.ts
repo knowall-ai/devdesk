@@ -209,9 +209,12 @@ export function ticketToWorkItem(ticket: Ticket): WorkItem {
     project: ticket.project,
     createdAt: ticket.createdAt,
     updatedAt: ticket.updatedAt,
-    completedWork: 0,
-    remainingWork: 0,
-    originalEstimate: 0,
+    // Carry the real hours through. These used to be hardcoded to 0, which
+    // meant the dialog on /kanban and /tickets could never show effort at all
+    // — the fields were fetched, mapped away, and then reinvented as zeros.
+    completedWork: ticket.completedWork ?? 0,
+    remainingWork: ticket.remainingWork ?? 0,
+    originalEstimate: ticket.originalEstimate ?? 0,
     assignee: ticket.assignee,
     devOpsUrl: ticket.devOpsUrl,
     tags: ticket.tags,
@@ -219,6 +222,7 @@ export function ticketToWorkItem(ticket: Ticket): WorkItem {
     resolution: ticket.resolution,
     mitigation: ticket.mitigation,
     resolvedReason: ticket.resolvedReason,
+    customerResponse: ticket.customerResponse,
     requester: ticket.requester,
     organization: ticket.organization,
   };
@@ -237,6 +241,7 @@ export function workItemToTicket(workItem: DevOpsWorkItem, organization?: Organi
     resolution: readResolutionField(fields),
     mitigation: readMitigationField(fields),
     resolvedReason: (fields['Microsoft.VSTS.Common.ResolvedReason'] as string) || undefined,
+    customerResponse: (fields['Custom.CustomerResponse'] as string) || undefined,
     status: mapStateToStatus(fields['System.State']),
     devOpsState: fields['System.State'], // Preserve original DevOps state
     workItemType: fields['System.WorkItemType'], // Azure DevOps work item type
@@ -255,8 +260,41 @@ export function workItemToTicket(workItem: DevOpsWorkItem, organization?: Organi
       workItem._links?.html?.href ||
       `${DEVOPS_BASE_URL}/${fields['System.TeamProject']}/_workitems/edit/${workItem.id}`,
     project: fields['System.TeamProject'],
+    // Effort hours. Left undefined when the field isn't set on the work item so
+    // callers can tell "not tracked" from "tracked as zero"; the UI renders
+    // either as 0h.
+    completedWork: readEffortField(fields, 'Microsoft.VSTS.Scheduling.CompletedWork'),
+    remainingWork: readEffortField(fields, 'Microsoft.VSTS.Scheduling.RemainingWork'),
+    originalEstimate: readEffortField(fields, 'Microsoft.VSTS.Scheduling.OriginalEstimate'),
     comments: [],
   };
+}
+
+/**
+ * Read a scheduling/effort field as a number.
+ *
+ * DevOps omits these fields entirely when they've never been set, and can
+ * return them as strings on some templates, so coerce and reject anything
+ * non-finite rather than letting NaN reach the UI.
+ */
+function readEffortField(fields: Record<string, unknown>, fieldRef: string): number | undefined {
+  const raw = fields[fieldRef];
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+// Thrown by AzureDevOpsService methods when the upstream DevOps API returns
+// a non-OK response. Callers can check `.status` to map to user-facing errors
+// (401/403 → permissions, 404 → not found, etc.) without parsing the message.
+export class DevOpsApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = 'DevOpsApiError';
+  }
 }
 
 export class AzureDevOpsService {
@@ -461,6 +499,10 @@ export class AzureDevOpsService {
         'Microsoft.VSTS.Common.Resolution',
         'Microsoft.VSTS.TCM.ReproSteps',
         'Microsoft.VSTS.TCM.SystemInfo',
+        'Custom.CustomerResponse',
+        'Microsoft.VSTS.Scheduling.CompletedWork',
+        'Microsoft.VSTS.Scheduling.RemainingWork',
+        'Microsoft.VSTS.Scheduling.OriginalEstimate',
       ].join(',');
       const workItemsResponse = await fetch(
         `${this.baseUrl}/_apis/wit/workitems?ids=${batch.join(',')}&fields=${fields}&api-version=7.0`,
@@ -486,7 +528,12 @@ export class AzureDevOpsService {
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch work item: ${response.statusText}`);
+      // Carry the status: callers that search every project need to tell
+      // "not in this project" apart from auth, throttling and outages.
+      throw new DevOpsApiError(
+        response.status,
+        `Failed to fetch work item: ${response.statusText}`
+      );
     }
 
     return response.json();
@@ -1039,6 +1086,31 @@ export class AzureDevOpsService {
     }
   }
 
+  // Delete a work item — moves it to the DevOps Recycle Bin (reversible).
+  // Pass destroy=true for a permanent, unrecoverable delete; whether the
+  // caller is allowed to do that is enforced by DevOps based on the user's
+  // role/PAT scope (no ZapDesk-side admin gate). Throws DevOpsApiError on
+  // failure so callers can branch on `.status` cleanly.
+  async deleteWorkItem(workItemId: number, destroy: boolean = false): Promise<void> {
+    const url = `${this.baseUrl}/_apis/wit/workitems/${workItemId}?destroy=${destroy ? 'true' : 'false'}&api-version=7.0`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: this.headers,
+    });
+
+    if (!response.ok) {
+      // Truncate upstream body so a verbose HTML/JSON error page can't blow up
+      // logs or echo internal details back to the client via the thrown message.
+      const rawBody = await response.text().catch(() => '');
+      const snippet = rawBody.slice(0, 200).trim();
+      const tail = rawBody.length > snippet.length ? '…' : '';
+      throw new DevOpsApiError(
+        response.status,
+        `Failed to delete work item: ${response.status} ${response.statusText}${snippet ? ` - ${snippet}${tail}` : ''}`
+      );
+    }
+  }
+
   // Change work item type (e.g., Task → Bug)
   // Azure DevOps supports this via PATCH with System.WorkItemType in the JSON patch body
   async changeWorkItemType(
@@ -1232,7 +1304,25 @@ export class AzureDevOpsService {
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to update work item: ${response.statusText}`);
+      // DevOps returns a structured error body for blocked transitions
+      // ("TF401320: Rule Error… transition not allowed"). Surface that so
+      // the route can pass through a clear, user-facing reason instead of
+      // collapsing it to a bare status code (issue #391).
+      let detail = response.statusText;
+      try {
+        const body = await response.text();
+        if (body) {
+          try {
+            const parsed = JSON.parse(body) as { message?: string };
+            if (parsed.message) detail = parsed.message;
+          } catch {
+            detail = body.slice(0, 500);
+          }
+        }
+      } catch {
+        // Body read failure — keep the status-text fallback above.
+      }
+      throw new DevOpsApiError(response.status, `Failed to update work item state: ${detail}`);
     }
 
     return response.json();

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
+import { toast } from 'sonner';
 import {
   DndContext,
   DragOverlay,
@@ -248,8 +249,16 @@ export default function KanbanBoard({
           await onTicketStateChange(activeItemId, targetState);
         } catch (error) {
           console.error('Failed to update item state:', error);
-          // Rollback on failure
+          // Rollback on failure — and surface the upstream reason. Process
+          // templates often block direct transitions (e.g. New → To Do
+          // when an intermediate state is required); without a toast the
+          // user just sees the card snap back with no explanation (#391).
           setLocalItems(sourceItems);
+          toast.error(
+            error instanceof Error && error.message
+              ? `Couldn't move to "${targetState}": ${error.message}`
+              : `Couldn't move to "${targetState}"`
+          );
         } finally {
           setIsUpdating(false);
         }
