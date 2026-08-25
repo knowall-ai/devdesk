@@ -297,6 +297,64 @@ export class DevOpsApiError extends Error {
   }
 }
 
+/**
+ * State names that every work item type defining them treats as Removed.
+ *
+ * Only these are safe to exclude from the WIQL query, which can filter on the
+ * state name but knows nothing about types. A name that is Removed for one
+ * type and something else for another is left in, and sorted out per item by
+ * `isRemovedItem` (#277).
+ */
+export function isRemovedForEveryType(
+  stateCategories: Record<string, string>,
+  categoriesByProjectType?: Record<string, Record<string, Record<string, string>>>
+): Set<string> {
+  const categoriesSeen = new Map<string, Set<string>>();
+
+  for (const byType of Object.values(categoriesByProjectType ?? {})) {
+    for (const byState of Object.values(byType)) {
+      for (const [state, category] of Object.entries(byState)) {
+        (categoriesSeen.get(state) ?? categoriesSeen.set(state, new Set()).get(state)!).add(
+          category
+        );
+      }
+    }
+  }
+
+  const removedOnly = new Set<string>();
+  for (const [state, category] of Object.entries(stateCategories)) {
+    const seen = categoriesSeen.get(state);
+    // No per-type data for this state (discovery failed, or it came only from
+    // the flat map): fall back to the flat category, as before #277.
+    if (!seen || seen.size === 0) {
+      if (category === 'Removed') removedOnly.add(state);
+      continue;
+    }
+    if (seen.size === 1 && seen.has('Removed')) removedOnly.add(state);
+  }
+  return removedOnly;
+}
+
+/** Whether this item's state is Removed *for this item's own project and type*. */
+export function isRemovedItem(
+  item: DevOpsWorkItem,
+  stateCategories: Record<string, string>,
+  categoriesByProjectType?: Record<string, Record<string, Record<string, string>>>
+): boolean {
+  const fields = item.fields || {};
+  const state = fields['System.State'] as string | undefined;
+  if (!state) return false;
+
+  const project = fields['System.TeamProject'] as string | undefined;
+  const type = fields['System.WorkItemType'] as string | undefined;
+
+  const perType = project && type ? categoriesByProjectType?.[project]?.[type]?.[state] : undefined;
+
+  // Fail open: with no per-type answer, defer to the flat map rather than
+  // hiding an item we can't classify.
+  return (perType ?? stateCategories[state]) === 'Removed';
+}
+
 export class AzureDevOpsService {
   private accessToken: string;
   private organization: string;
@@ -2520,7 +2578,13 @@ export class AzureDevOpsService {
   // Uses org-level WIQL queries (no project scope) for performance.
   async getStandupData(
     targetDate: Date,
-    stateCategories: Record<string, string>
+    stateCategories: Record<string, string>,
+    /**
+     * project -> work item type -> state name -> category. Optional: when it
+     * is absent (state discovery failed) the flat `stateCategories` map is
+     * used on its own, which is what happened before #277.
+     */
+    categoriesByProjectType?: Record<string, Record<string, Record<string, string>>>
   ): Promise<{ items: DevOpsWorkItem[] }> {
     // Recently-done window: 7 days ending on the target date (inclusive).
     // This matches the "recently-solved" view elsewhere in the app and ensures
@@ -2539,12 +2603,20 @@ export class AzureDevOpsService {
     const nextDayStr = nextDay.toISOString().split('T')[0];
 
     // Build state lists dynamically from categories.
-    // 'Removed' states are intentionally excluded — removed work items are
-    // hidden from the Kanban board (issue #277).
+    //
+    // Removed work items are hidden from the Kanban board (#277), but WIQL can
+    // only filter on the state *name*, while categories are defined per work
+    // item type. Two types can therefore share a name in different categories.
+    // So the query is deliberately coarse and fails *open*: a name is dropped
+    // only when every type that defines it agrees it is Removed. Anything
+    // ambiguous is fetched and then filtered per item below, which is the only
+    // place the item's own type is known.
+    const removedOnly = isRemovedForEveryType(stateCategories, categoriesByProjectType);
+
     const doneStates: string[] = [];
     const activeStates: string[] = [];
     for (const [state, category] of Object.entries(stateCategories)) {
-      if (category === 'Removed') continue;
+      if (removedOnly.has(state)) continue;
       if (category === 'Resolved' || category === 'Completed') {
         doneStates.push(state);
       } else {
@@ -2636,7 +2708,12 @@ export class AzureDevOpsService {
     const activeIds: number[] = activeData.workItems?.map((wi: { id: number }) => wi.id) || [];
     const items = await this.fetchWorkItemBatch([...doneIds, ...activeIds]);
 
-    return { items };
+    // The precise half of the Removed filter. Here each item carries its own
+    // project and type, so the ambiguous state names the query let through can
+    // finally be judged correctly (#277).
+    return {
+      items: items.filter((item) => !isRemovedItem(item, stateCategories, categoriesByProjectType)),
+    };
   }
 
   // Fetch work item details in batches of 200

@@ -25,6 +25,16 @@ interface StateMetadata {
    * project may have one (#391).
    */
   statesByProjectType: Record<string, Record<string, string[]>>;
+  /**
+   * Project -> work item type -> state name -> that state's category *for that
+   * type*.
+   *
+   * `categories` above flattens this by state name, which is lossy: two work
+   * item types can use the same state name in different categories, and the
+   * last one written wins. That flat map is fine for column ordering, but not
+   * for deciding whether a given item is Removed — see `getStandupData` (#277).
+   */
+  categoriesByProjectType: Record<string, Record<string, Record<string, string>>>;
 }
 
 // Per-org TTL cache + in-flight dedup for state metadata.
@@ -44,7 +54,11 @@ async function fetchStateMetadata(
   const cached = stateCategoryCacheByOrg.get(organization);
   if (cached) {
     if (Date.now() - cached.timestamp < STATE_CACHE_TTL_MS) {
-      return { categories: cached.categories, statesByProjectType: cached.statesByProjectType };
+      return {
+        categories: cached.categories,
+        statesByProjectType: cached.statesByProjectType,
+        categoriesByProjectType: cached.categoriesByProjectType,
+      };
     }
     // Expired — evict so the map doesn't accumulate stale per-org entries forever.
     stateCategoryCacheByOrg.delete(organization);
@@ -71,7 +85,11 @@ async function doFetchStateMetadata(
   accessToken: string,
   organization: string
 ): Promise<StateMetadata> {
-  const empty: StateMetadata = { categories: {}, statesByProjectType: {} };
+  const empty: StateMetadata = {
+    categories: {},
+    statesByProjectType: {},
+    categoriesByProjectType: {},
+  };
 
   // Reuse the cached project list rather than re-fetching independently
   let projects: { name: string }[] = [];
@@ -84,6 +102,7 @@ async function doFetchStateMetadata(
 
   const stateCategories: Record<string, string> = {};
   const statesByProjectType: Record<string, Record<string, Set<string>>> = {};
+  const categoriesByProjectType: Record<string, Record<string, Record<string, string>>> = {};
 
   // Fetch states from ALL projects to cover different process templates
   const projectResults = await Promise.allSettled(
@@ -147,12 +166,16 @@ async function doFetchStateMetadata(
     const { project, types } = result.value;
     for (const { type, states } of types) {
       for (const state of states) {
-        // Categories stay org-wide: they only drive column *ordering*, which
-        // is a union across templates by design.
+        // Categories stay org-wide here: they only drive column *ordering*,
+        // which is a union across templates by design.
         stateCategories[state.name] = state.category;
         // Allowed states are kept per project, because a state defined only in
         // another project's process template must not unblock a column here.
         ((statesByProjectType[project] ??= {})[type] ??= new Set()).add(state.name);
+        // The category is kept per project and type too. The flat map above
+        // loses it when two types share a state name in different categories,
+        // and "is this item Removed?" has to be answered per item (#277).
+        ((categoriesByProjectType[project] ??= {})[type] ??= {})[state.name] = state.category;
       }
     }
   }
@@ -167,6 +190,7 @@ async function doFetchStateMetadata(
         ),
       ])
     ),
+    categoriesByProjectType,
   };
 }
 
@@ -239,18 +263,22 @@ export async function GET(request: NextRequest) {
 
     // Step 1: Fetch state categories dynamically from DevOps (cached + deduped)
     const devopsService = new AzureDevOpsService(session.accessToken, organization);
-    const { categories: stateCategories, statesByProjectType } = await fetchStateMetadata(
-      devopsService,
-      session.accessToken,
-      organization
-    );
+    const {
+      categories: stateCategories,
+      statesByProjectType,
+      categoriesByProjectType,
+    } = await fetchStateMetadata(devopsService, session.accessToken, organization);
 
     if (Object.keys(stateCategories).length === 0) {
       return NextResponse.json({ error: 'Failed to fetch state categories' }, { status: 500 });
     }
 
     // Step 2: Fetch work items using dynamic state lists
-    const { items } = await devopsService.getStandupData(targetDate, stateCategories);
+    const { items } = await devopsService.getStandupData(
+      targetDate,
+      stateCategories,
+      categoriesByProjectType
+    );
 
     // Step 2b: If currentSprintOnly, fetch current iterations and filter
     let currentIterations: Map<string, string> | null = null;
