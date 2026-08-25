@@ -69,6 +69,13 @@ describe('rewriteAttachmentUrls', () => {
     expect(rewriteAttachmentUrls(html)).toBe(html);
   });
 
+  it('is idempotent — already-proxied HTML is left alone', () => {
+    const html = `<img src="https://dev.azure.com/KnowAll/Internal/_apis/wit/attachments/${GUID}?fileName=x.png">`;
+    const once = rewriteAttachmentUrls(html);
+
+    expect(rewriteAttachmentUrls(once)).toBe(once);
+  });
+
   it('returns an empty string for null, undefined and empty input', () => {
     expect(rewriteAttachmentUrls(null)).toBe('');
     expect(rewriteAttachmentUrls(undefined)).toBe('');
