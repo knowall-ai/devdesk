@@ -16,7 +16,7 @@ describe('customerReplyNotificationTemplate', () => {
     const html = customerReplyNotificationTemplate({
       ticketId: 42,
       ticketSubject: PAYLOAD,
-      customerEmail: `evil@example.com${PAYLOAD}`,
+      customerEmail: `sender-address${PAYLOAD}`,
       replyContentHtml: '<p>hello</p>',
     });
 
@@ -28,7 +28,7 @@ describe('customerReplyNotificationTemplate', () => {
     const html = customerReplyNotificationTemplate({
       ticketId: 42,
       ticketSubject: 'Printer is on fire',
-      customerEmail: 'jane@example.com',
+      customerEmail: 'sender-address',
       replyContentHtml: '<p>Still <strong>smoking</strong></p>',
     });
 
