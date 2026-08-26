@@ -75,7 +75,11 @@ export default function TicketCountsProvider({ children }: Props) {
 
   const accessToken = session?.accessToken;
   const accountName = selectedOrganization?.accountName;
-  const userEmail = session?.user?.email;
+  /**
+   * Stable identity for scoping. The session callback sets `user.id` from the
+   * Azure AD object id where the provider supplies one; email is the fallback.
+   */
+  const identity = session?.user?.id ?? session?.user?.email ?? 'unknown';
 
   /**
    * Who and where these counts belong to.
@@ -85,8 +89,14 @@ export default function TicketCountsProvider({ children }: Props) {
    * numbers on screen, and signing out left the previous user's there. Both
    * persisted indefinitely if the replacement request failed. Null whenever we
    * have no business showing anything.
+   *
+   * Note what this deliberately does *not* gate on: a missing identity falls
+   * back to a placeholder rather than blocking the fetch. Scoping is a
+   * correctness guard, and turning it into a precondition would mean an
+   * account without an id or an email silently got no counts at all — trading
+   * a narrow staleness window for a blank sidebar.
    */
-  const scopeKey = accessToken && accountName && userEmail ? `${userEmail}::${accountName}` : null;
+  const scopeKey = accessToken && accountName ? `${identity}::${accountName}` : null;
 
   const fetchCounts = useCallback(async () => {
     if (!accessToken || !accountName || !scopeKey) return;
