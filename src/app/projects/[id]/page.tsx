@@ -10,6 +10,7 @@ import Link from 'next/link';
 import { format } from 'date-fns';
 import type { Organization, SLALevel, Epic } from '@/types';
 import { useOrganization } from '@/components/providers/OrganizationProvider';
+import { htmlToPlainText } from '@/lib/sanitize-html';
 
 interface ProjectWithSLA extends Organization {
   sla?: SLALevel;
@@ -385,12 +386,9 @@ export default function ProjectDetailPage() {
                             <p
                               className="line-clamp-2 text-sm"
                               style={{ color: 'var(--text-muted)' }}
-                              dangerouslySetInnerHTML={{
-                                __html:
-                                  epic.description.replace(/<[^>]*>/g, '').slice(0, 200) +
-                                  (epic.description.length > 200 ? '...' : ''),
-                              }}
-                            />
+                            >
+                              {htmlToPlainText(epic.description, 200)}
+                            </p>
                           )}
                           <div
                             className="mt-2 flex items-center gap-4 text-xs"

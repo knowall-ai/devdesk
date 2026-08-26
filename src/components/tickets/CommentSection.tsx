@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { format } from 'date-fns';
 import { Send, Zap, Paperclip, Loader2 } from 'lucide-react';
 import Avatar from '@/components/common/Avatar';
+import UserHtml from '@/components/common/UserHtml';
 import MentionInput from '@/components/common/MentionInput';
 import { rewriteAttachmentUrls, buildAttachmentProxyUrl } from '@/lib/attachment-utils';
 import type { TicketComment, User, Attachment } from '@/types';
@@ -152,10 +153,11 @@ export default function CommentSection({
                       {format(comment.createdAt, 'dd MMM yyyy, HH:mm')}
                     </span>
                   </div>
-                  <div
+                  <UserHtml
                     className={`user-content ${compact ? 'prose prose-sm prose-invert max-w-none text-sm' : 'text-sm'}`}
                     style={{ color: 'var(--text-secondary)' }}
-                    dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(comment.content) }}
+                    html={comment.content}
+                    mentions
                   />
                 </div>
               </div>

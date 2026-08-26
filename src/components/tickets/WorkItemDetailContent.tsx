@@ -10,7 +10,7 @@ import {
   hasResolutionField,
 } from '@/config/process-templates';
 import { hasTicketTag } from '@/lib/tags';
-import { rewriteAttachmentUrls } from '@/lib/attachment-utils';
+import UserHtml from '@/components/common/UserHtml';
 import Avatar from '../common/Avatar';
 import CommentSection from './CommentSection';
 import ZapDialog from './ZapDialog';
@@ -133,10 +133,10 @@ function ResolutionField({
           autoFocus
         />
       ) : workItem.resolution ? (
-        <div
+        <UserHtml
           className="prose prose-sm prose-invert user-content max-w-none"
           style={{ color: 'var(--text-secondary)' }}
-          dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(workItem.resolution) }}
+          html={workItem.resolution}
         />
       ) : (
         <button
@@ -405,15 +405,17 @@ export default function WorkItemDetailContent({
                   {format(workItem.createdAt, 'dd MMM yyyy, HH:mm')}
                 </span>
               </div>
-              <div
-                className="prose prose-sm prose-invert user-content max-w-none"
-                style={{ color: 'var(--text-secondary)' }}
-                dangerouslySetInnerHTML={{
-                  __html: workItem.description
-                    ? rewriteAttachmentUrls(workItem.description)
-                    : '<em>No description provided</em>',
-                }}
-              />
+              {workItem.description ? (
+                <UserHtml
+                  className="prose prose-sm prose-invert user-content max-w-none"
+                  style={{ color: 'var(--text-secondary)' }}
+                  html={workItem.description}
+                />
+              ) : (
+                <p className="text-sm italic" style={{ color: 'var(--text-muted)' }}>
+                  No description provided
+                </p>
+              )}
             </div>
           </div>
         </div>
@@ -433,10 +435,10 @@ export default function WorkItemDetailContent({
               placeholder="Add a description..."
             />
           ) : workItem.description ? (
-            <div
+            <UserHtml
               className="prose prose-sm prose-invert user-content max-w-none"
               style={{ color: 'var(--text-secondary)' }}
-              dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(workItem.description) }}
+              html={workItem.description}
             />
           ) : (
             <p className="text-sm italic" style={{ color: 'var(--text-muted)' }}>
@@ -452,10 +454,10 @@ export default function WorkItemDetailContent({
           <h3 className="mb-2 text-sm font-medium" style={{ color: 'var(--text-muted)' }}>
             Customer Response
           </h3>
-          <div
+          <UserHtml
             className="prose prose-sm prose-invert user-content max-w-none"
             style={{ color: 'var(--text-secondary)' }}
-            dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(workItem.customerResponse) }}
+            html={workItem.customerResponse}
           />
         </div>
       )}
