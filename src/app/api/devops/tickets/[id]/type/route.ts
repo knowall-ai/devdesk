@@ -50,11 +50,15 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: 'Type is too long' }, { status: 400 });
     }
 
-    // `project` is accepted but not used to resolve anything. Every caller in
-    // the app sends it, so rejecting it as an unknown key would break the
+    // `project` is accepted but never used to resolve anything. Every caller
+    // in the app sends it, so rejecting it as an unknown key would break the
     // feature outright — but a client's idea of the owning project can be
     // stale after a move, which is the bug this PR exists to fix (#294). The
     // org-level lookup below stays the source of truth.
+    //
+    // A blank value is treated as absent rather than rejected: it is a hint we
+    // ignore, so 400-ing a caller whose `ticket.project` happens to be empty
+    // would fail a request that would otherwise have succeeded.
     if (project !== undefined && typeof project !== 'string') {
       return NextResponse.json({ error: 'project must be a string' }, { status: 400 });
     }
