@@ -3,8 +3,9 @@
 import { useSession } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense, useEffect, useState, useCallback, useRef, useMemo } from 'react';
+import { toast } from 'sonner';
 import Link from 'next/link';
-import { RefreshCw, FolderOpen, User } from 'lucide-react';
+import { RefreshCw, FolderOpen, User, Radio } from 'lucide-react';
 import { MainLayout } from '@/components/layout';
 import { LoadingSpinner } from '@/components/common';
 import { StandupSummaryCards, KanbanGroupSection } from '@/components/standup';
@@ -21,6 +22,14 @@ type GroupBy = 'project' | 'person';
 const STANDUP_CACHE_TTL_MS = 30 * 1000;
 const standupCache: Map<string, { data: StandupData; timestamp: number }> = new Map();
 const standupInFlight: Map<string, Promise<StandupData>> = new Map();
+
+// How often the "Live update" toggle polls for changes. Tied to the cache
+// TTL so the two stay in sync — every tick will bypass the cache (force
+// refresh) but the cadence still matches when data is considered fresh.
+// The interval is started/stopped based on visibility (see effect below),
+// and an extra fetch fires on tab-return so the board catches up.
+const LIVE_UPDATE_INTERVAL_MS = STANDUP_CACHE_TTL_MS;
+const LIVE_UPDATE_STORAGE_KEY = 'zapdesk:kanban:liveUpdate';
 
 function cacheKey(organization: string, currentSprintOnly: boolean): string {
   return `${organization}::${currentSprintOnly ? 'sprint' : 'all'}`;
@@ -106,12 +115,44 @@ function StandupPageContent() {
   const currentSprintOnly = searchParams.get('sprint') === 'true';
 
   const [standupData, setStandupData] = useState<StandupData | null>(null);
+  // The cache key of the board currently on screen, readable from inside
+  // `fetchStandupData` without putting `standupData` in its dependency list —
+  // which would rebuild the callback on every poll and re-subscribe the
+  // live-update effect along with it. A key rather than a boolean because the
+  // key carries the org and the sprint filter: after switching either, the
+  // board still rendered is the *previous* one, and treating it as a fallback
+  // would leave the user reading data for a filter they've moved off.
+  const loadedKeyRef = useRef<string | null>(null);
+  // Monotonic request id for the board, mirroring ticketFetchSeqRef below.
+  // Switch org while a fetch is in flight and the old one can still resolve
+  // last; without this it would commit its data, and its loading/error state,
+  // over the board the user actually asked for.
+  const boardFetchSeqRef = useRef(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [autoRefresh, setAutoRefresh] = useState(false);
-  const autoRefreshRef = useRef(autoRefresh);
-  autoRefreshRef.current = autoRefresh;
+  const [liveUpdate, setLiveUpdate] = useState(false);
+  // Whether we've finished reading the persisted value from localStorage. This
+  // is state rather than a ref on purpose: a ref is set synchronously, so the
+  // persist effect would see "hydrated" in the same flush while `liveUpdate`
+  // was still the default `false` and write `'false'` over a stored `'true'` —
+  // briefly, but long enough to emit a wrong `storage` event to other tabs.
+  // As state it commits together with `setLiveUpdate` below, so the first
+  // persist run already sees the restored value.
+  const [hydrated, setHydrated] = useState(false);
+
+  // Restore the user's last "Live update" choice on mount so they don't have
+  // to re-enable it every visit. Done in an effect to keep SSR stable.
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(LIVE_UPDATE_STORAGE_KEY) === 'true') {
+        setLiveUpdate(true);
+      }
+    } catch {
+      // localStorage may throw in private/sandboxed contexts — ignore
+    }
+    setHydrated(true);
+  }, []);
 
   // Detail dialog state — clicking a card fetches the full ticket and
   // opens it in a dialog rather than navigating to the full page (#368).
@@ -129,11 +170,15 @@ function StandupPageContent() {
       }
 
       const key = cacheKey(selectedOrganization.accountName, currentSprintOnly);
+      const mySeq = ++boardFetchSeqRef.current;
+      /** False once a later call has started; nothing stale may commit then. */
+      const isCurrent = () => mySeq === boardFetchSeqRef.current;
 
       // Serve fresh cached data instantly (back-navigation case)
       if (!forceRefresh) {
         const cached = standupCache.get(key);
         if (cached && Date.now() - cached.timestamp < STANDUP_CACHE_TTL_MS) {
+          loadedKeyRef.current = key;
           setStandupData(cached.data);
           setLoading(false);
           setRefreshing(false);
@@ -150,8 +195,11 @@ function StandupPageContent() {
       setError(null);
 
       try {
-        // Dedupe concurrent requests for the same cache key
-        let promise = forceRefresh ? undefined : standupInFlight.get(key);
+        // Dedupe concurrent requests for the same cache key. forceRefresh
+        // bypasses the cache TTL above but still coalesces with any
+        // in-flight request so a tick + visibilitychange + mutation patch
+        // don't all double-hit the API simultaneously.
+        let promise = standupInFlight.get(key);
         if (!promise) {
           promise = (async () => {
             const params = new URLSearchParams();
@@ -175,13 +223,38 @@ function StandupPageContent() {
         } finally {
           standupInFlight.delete(key);
         }
+        // Cache regardless — the data is valid for its key even if we've since
+        // moved on, and a later switch back should get the benefit of it.
         standupCache.set(key, { data, timestamp: Date.now() });
+        if (!isCurrent()) return;
+        loadedKeyRef.current = key;
         setStandupData(data);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load standup data');
+        const message = err instanceof Error ? err.message : 'Failed to load standup data';
+        // `error` swaps the whole board out for the error screen, which is
+        // right on first load but destructive for a refresh that happens over
+        // a board the user is already reading — a failed live-update tick
+        // would blank it. Those paths report the failure and keep the data
+        // they have, stale as it may be. The fixed toast id means a poll that
+        // keeps failing replaces its message instead of stacking up.
+        // The Refresh button is in the header, which renders on the error
+        // screen too — so "is this a background refresh?" isn't enough on its
+        // own. Falling back to the board on screen is only honest when that
+        // board is for the same key; with nothing to fall back on, or with a
+        // board belonging to a filter the user has moved off, the error state
+        // has to stand or the page lies or goes blank with no way back.
+        if (!isCurrent()) return;
+        if (isAutoRefresh && loadedKeyRef.current === key) {
+          toast.error(`Couldn't refresh the board: ${message}`, { id: 'kanban-refresh-error' });
+        } else {
+          setError(message);
+        }
       } finally {
-        setLoading(false);
-        setRefreshing(false);
+        // A superseded request must not clear the spinner the current one set.
+        if (isCurrent()) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       }
     },
     [
@@ -199,15 +272,67 @@ function StandupPageContent() {
     }
   }, [session?.accessToken, hasOrganization, fetchStandupData]);
 
+  // Live update: while the tab is visible, run a poll on the cache TTL
+  // cadence. When the tab is hidden the interval is cleared so no timer
+  // is alive in the background. When the tab returns we trigger an
+  // immediate refetch and restart the interval, so the board catches up
+  // without waiting for the next tick.
   useEffect(() => {
-    if (!autoRefresh) return;
-    const interval = setInterval(() => {
-      if (autoRefreshRef.current) {
-        fetchStandupData(true, true);
+    if (!liveUpdate) return;
+
+    let intervalId: ReturnType<typeof setInterval> | null = null;
+
+    // No need to re-check the toggle in here: this effect only runs while
+    // `liveUpdate` is true and its cleanup tears the timer down the moment
+    // it flips, so reaching this point already means live update is on.
+    const tick = () => {
+      fetchStandupData(true, true);
+    };
+
+    const startInterval = () => {
+      if (intervalId === null) {
+        intervalId = setInterval(tick, LIVE_UPDATE_INTERVAL_MS);
       }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [autoRefresh, fetchStandupData]);
+    };
+
+    const stopInterval = () => {
+      if (intervalId !== null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        fetchStandupData(true, true);
+        startInterval();
+      } else {
+        stopInterval();
+      }
+    };
+
+    if (document.visibilityState === 'visible') {
+      startInterval();
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+
+    return () => {
+      stopInterval();
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    };
+  }, [liveUpdate, fetchStandupData]);
+
+  // Persist the toggle so it carries across page reloads. Skipped until
+  // after the restore effect has hydrated the value, so we don't briefly
+  // overwrite a stored `'true'` with the initial `false`.
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(LIVE_UPDATE_STORAGE_KEY, liveUpdate ? 'true' : 'false');
+    } catch {
+      // ignore — non-fatal
+    }
+  }, [hydrated, liveUpdate]);
 
   // Generic state-change. Pass `project` when known to avoid an
   // expensive cross-project scan on the server.
@@ -218,7 +343,11 @@ function StandupPageContent() {
       const response = await devOpsPatch(`/api/devops/tickets/${itemId}/state`, body);
 
       if (!response.ok) {
-        throw new Error('Failed to update state');
+        // Pull the upstream reason out of the route response so callers
+        // (KanbanBoard drag, dialog state dropdown) can show the actual
+        // workflow-rule message — not just "Failed to update state".
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to update state');
       }
 
       fetchStandupData(true, true);
@@ -467,19 +596,31 @@ function StandupPageContent() {
                 Current Sprint
               </label>
 
-              {/* Auto-refresh toggle */}
-              <label
-                className="flex cursor-pointer items-center gap-2 text-xs"
-                style={{ color: 'var(--text-muted)' }}
+              {/* Live update toggle. A broadcast icon that pulses while polling
+                  reads as "live" at a glance in a way a checkbox doesn't, and it
+                  doubles as the status indicator — if it isn't pulsing, the board
+                  isn't refreshing itself. role="switch" keeps the semantics a
+                  checkbox gave us for free. */}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={liveUpdate}
+                onClick={() => setLiveUpdate((on) => !on)}
+                className={`flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition-colors ${
+                  liveUpdate
+                    ? 'border-transparent bg-[var(--primary)] text-white'
+                    : 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]'
+                }`}
+                style={liveUpdate ? undefined : { borderColor: 'var(--border)' }}
+                title={
+                  liveUpdate
+                    ? `Live: refreshing every ${Math.round(LIVE_UPDATE_INTERVAL_MS / 1000)} seconds while this tab is visible`
+                    : `Refresh the board automatically every ${Math.round(LIVE_UPDATE_INTERVAL_MS / 1000)} seconds while this tab is visible`
+                }
               >
-                <input
-                  type="checkbox"
-                  checked={autoRefresh}
-                  onChange={(e) => setAutoRefresh(e.target.checked)}
-                  className="accent-[var(--primary)]"
-                />
-                Auto-refresh
-              </label>
+                <Radio size={14} className={liveUpdate ? 'animate-pulse' : ''} />
+                Live update
+              </button>
 
               {/* Manual refresh */}
               <button
@@ -523,6 +664,7 @@ function StandupPageContent() {
                     key={group.groupName}
                     groupName={group.groupName}
                     columns={group.columns}
+                    allowedStatesByProjectType={standupData.allowedStatesByProjectType}
                     onStateChange={handleStateChange}
                     onItemClick={handleItemClick}
                   />

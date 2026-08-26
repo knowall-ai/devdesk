@@ -19,6 +19,7 @@ import {
   Download,
   Plus,
   Tag,
+  Trash2,
 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import type {
@@ -35,6 +36,7 @@ import { ALLOWED_ATTACHMENT_TYPES } from '@/types';
 import { ensureActiveState } from '@/types';
 import { highlightMentions } from '@/lib/mentions';
 import { formatFileSize, validateFile } from '@/lib/attachment-utils';
+import { hasTicketTag } from '@/lib/tags';
 import StatusBadge from '../common/StatusBadge';
 import Avatar from '../common/Avatar';
 import PriorityIndicator from '../common/PriorityIndicator';
@@ -71,6 +73,9 @@ interface TicketDetailProps {
   onMitigationChange?: (mitigation: string) => Promise<void>;
   onUploadAttachment?: (file: File) => Promise<Attachment>;
   onRefreshTicket?: () => Promise<void>;
+  // Move to DevOps Recycle Bin. Caller is responsible for navigation/refresh
+  // after success (issue #374).
+  onDelete?: () => Promise<void>;
   processTemplate?: string;
 }
 
@@ -97,18 +102,41 @@ export default function TicketDetail({
   onMitigationChange,
   onUploadAttachment,
   onRefreshTicket,
+  onDelete,
   processTemplate,
 }: TicketDetailProps) {
   const router = useRouter();
   const templateConfig = getTemplateConfig(processTemplate);
   const showResolution = hasResolutionField(ticket.workItemType, templateConfig);
   const showMitigation = hasMitigationField(ticket.workItemType, templateConfig);
+  // Items without the "ticket" tag are internal work items (created from the
+  // Kanban Board, etc.) — they have no customer-facing surface so the page
+  // should read as a Work Item, not a Ticket (issue #372).
+  const isTicket = hasTicketTag(ticket.tags);
   const [activeTab, setActiveTab] = useState<DetailTab>('details');
   const [newComment, setNewComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isZapDialogOpen, setIsZapDialogOpen] = useState(false);
   const [isDetailsSidebarOpen, setIsDetailsSidebarOpen] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const { get: devOpsGet } = useDevOpsApi();
+
+  const handleDeleteClick = async () => {
+    if (!onDelete || isDeleting) return;
+    const confirmed = window.confirm(
+      `Move "${ticket.title}" (#${ticket.id}) to the DevOps Recycle Bin?\n\nIt will be removed from ZapDesk views. You can restore it from the DevOps Recycle Bin if needed.`
+    );
+    if (!confirmed) return;
+    setIsDeleting(true);
+    // Don't swallow — let the consumer's onDelete decide how to surface
+    // failure (toast, redirect, etc.). finally guarantees the button is
+    // re-enabled either way.
+    try {
+      await onDelete();
+    } finally {
+      setIsDeleting(false);
+    }
+  };
 
   // State editing
   const [isStateDropdownOpen, setIsStateDropdownOpen] = useState(false);
@@ -698,6 +726,20 @@ export default function TicketDetail({
             >
               View in DevOps <ExternalLink size={14} />
             </a>
+            {onDelete && (
+              <button
+                type="button"
+                onClick={handleDeleteClick}
+                disabled={isDeleting}
+                className="hidden items-center gap-1 rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50 sm:flex"
+                style={{ color: '#ef4444', cursor: isDeleting ? 'not-allowed' : 'pointer' }}
+                title="Delete (move to DevOps Recycle Bin)"
+                aria-label="Delete ticket"
+              >
+                {isDeleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                Delete
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-4">
@@ -1225,7 +1267,9 @@ export default function TicketDetail({
                 className="h-4 w-4 rounded accent-[var(--primary)]"
               />
               <span className="text-xs" style={{ color: 'var(--primary)' }}>
-                Public reply – all comments are visible to customers in DevOps
+                {isTicket
+                  ? 'Public reply – all comments are visible to customers in DevOps'
+                  : 'Comments are visible in DevOps'}
               </span>
             </label>
           </div>
@@ -1356,7 +1400,7 @@ export default function TicketDetail({
         <div className="p-4">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-sm font-medium" style={{ color: 'var(--text-primary)' }}>
-              Ticket Details
+              {isTicket ? 'Ticket Details' : 'Work Item Details'}
             </h3>
             <button
               onClick={() => setIsDetailsSidebarOpen(false)}

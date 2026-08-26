@@ -41,9 +41,10 @@ const priorityOptions: Array<{ value: number; label: TicketPriority }> = [
 ];
 
 const formatHours = (hours: number) => {
-  if (hours === 0) return '0';
-  if (hours < 1) return hours.toFixed(1);
-  return Math.round(hours).toString();
+  // Whole hours read cleanly as "8"; anything else keeps one decimal so a
+  // half-hour estimate isn't rounded away (StandupKanbanCard does the same).
+  if (Number.isInteger(hours)) return hours.toString();
+  return hours.toFixed(1);
 };
 
 export default function WorkItemDetailSidebar({
@@ -487,8 +488,9 @@ export default function WorkItemDetailSidebar({
         </div>
       </div>
 
-      {/* Hours Summary - for work items */}
-      {showEffortHours && (workItem.completedWork > 0 || workItem.remainingWork > 0) && (
+      {/* Hours Summary - for work items. Rendered even when the hours are unset,
+          so "0h remaining" is stated rather than the row vanishing. */}
+      {showEffortHours && (
         <div>
           <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
             Hours

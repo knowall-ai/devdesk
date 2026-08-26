@@ -35,6 +35,12 @@ export default function StandupKanbanCard({ item, isDragging, onClick }: Standup
 
   const typeColor = typeColors[item.workItemType] || 'var(--text-muted)';
 
+  // Always show remaining effort, including when the field is unset — "0h" is a
+  // reading, whereas a missing badge is indistinguishable from "not estimated"
+  // and made the number look absent on every card (#6609).
+  const remaining = typeof item.remainingWork === 'number' ? item.remainingWork : 0;
+  const remainingLabel = Number.isInteger(remaining) ? `${remaining}h` : `${remaining.toFixed(1)}h`;
+
   const cardBody = (
     <>
       <div className="mb-1.5 flex items-center justify-between gap-2">
@@ -50,7 +56,16 @@ export default function StandupKanbanCard({ item, isDragging, onClick }: Standup
           </span>
           <span className="text-xs text-[var(--text-muted)]">#{item.id}</span>
         </div>
-        <PriorityIndicator priority={item.priority} />
+        <div className="flex items-center gap-1.5">
+          <span
+            className="rounded bg-[var(--surface-hover)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-muted)]"
+            aria-label={`Remaining effort: ${remainingLabel}`}
+            title={`Remaining effort: ${remainingLabel}`}
+          >
+            {remainingLabel}
+          </span>
+          <PriorityIndicator priority={item.priority} />
+        </div>
       </div>
 
       <h4 className="mb-2 line-clamp-2 text-sm font-medium text-[var(--text-primary)]">
@@ -89,6 +104,11 @@ export default function StandupKanbanCard({ item, isDragging, onClick }: Standup
       {...attributes}
       {...listeners}
       className={`kanban-card ${isDragging ? 'kanban-card-dragging' : ''}`}
+      // Card-level tooltip so hovering anywhere on the card shows the full
+      // work item title (the <h4> truncates with line-clamp-2). Child
+      // elements with their own title (remaining effort, project) override
+      // locally when hovered.
+      title={item.title}
     >
       {onClick ? (
         <button
