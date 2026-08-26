@@ -5,13 +5,6 @@ import { validateOrganizationAccess } from '@/lib/devops-auth';
 import { resolveAllowedValues, type DevOpsField } from '@/lib/devops-fields';
 import { DEFAULT_PRIORITY_LABELS } from '@/lib/priority';
 
-// Allowed priority field reference names to prevent arbitrary field injection
-const ALLOWED_PRIORITY_FIELDS = new Set([
-  'Microsoft.VSTS.Common.Priority',
-  'Custom.PriorityLevel',
-  'Microsoft.VSTS.CMMI.Priority',
-]);
-
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ project: string }> }
@@ -89,9 +82,6 @@ export async function GET(
 
     // Try each candidate field in order until one yields allowed values
     for (const field of prioritizedFields) {
-      // Track allowed fields for security validation
-      ALLOWED_PRIORITY_FIELDS.add(field.referenceName);
-
       const allowedValues = await resolveAllowedValues(
         field,
         organization,
