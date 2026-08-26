@@ -247,7 +247,10 @@ export default function KanbanGroupSection({
       const activeItemId = active.id as number;
       const targetCol = findColumn(activeItemId);
       if (!targetCol) {
+        // handleDragOver may already have moved the card in localItems, so
+        // bail out through the same rollback every other early return uses.
         debugWarn('[Standup DnD] dropped item is in no column', { activeItemId });
+        syncFromProps();
         return;
       }
 
