@@ -121,12 +121,25 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       ? await devopsService.getWorkItemTypeStates(projectName, workItemType)
       : [];
 
+    // An empty list means the lookup failed, not that the type has no states —
+    // getWorkItemTypeStates returns [] for a non-OK response as well. Reporting
+    // that as a workflow rejection would tell the user a transient fault is
+    // permanent, which is the kind of misleading error this PR exists to remove.
+    if (states.length === 0) {
+      return NextResponse.json(
+        {
+          error: `Could not read the states defined for ${workItemType || 'this work item'}. Please try again.`,
+        },
+        { status: 502 }
+      );
+    }
+
     const devOpsState = resolveStateForStatus(ticketStatus, states, currentState);
 
     if (!devOpsState) {
       // Say what went wrong. The old code guessed a state name and let DevOps
       // answer with a raw rule error the UI then swallowed.
-      const available = states.map((s) => s.name).join(', ') || 'none reported';
+      const available = states.map((s) => s.name).join(', ');
       return NextResponse.json(
         {
           error:

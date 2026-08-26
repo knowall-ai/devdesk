@@ -126,6 +126,20 @@ interface GroupedItems {
 }
 
 // Bulk action definitions
+/**
+ * Pull an error string out of a response body.
+ *
+ * Our own routes always send `{ error: string }`, but a gateway, proxy or auth
+ * interstitial can answer with JSON of any shape. Without this check a
+ * non-string `error` would reach the toast and render as "[object Object]" —
+ * the same opaque failure message this component set out to stop showing.
+ */
+function errorTextFrom(data: unknown): string {
+  if (typeof data !== 'object' || data === null) return '';
+  const { error } = data as { error?: unknown };
+  return typeof error === 'string' ? error : '';
+}
+
 /** "1 item" / "2 items" without a dependency. */
 function plural(count: number): string {
   return count === 1 ? '' : 's';
@@ -374,11 +388,11 @@ export default function WorkItemBoard({
               body: JSON.stringify(body),
             });
             if (response.ok) return { id, ok: true as const };
-            const data = await response.json().catch(() => ({}));
+            const data: unknown = await response.json().catch(() => null);
             return {
               id,
               ok: false as const,
-              reason: data.error || `${response.status} ${response.statusText}`,
+              reason: errorTextFrom(data) || `${response.status} ${response.statusText}`,
             };
           } catch (error) {
             return {
