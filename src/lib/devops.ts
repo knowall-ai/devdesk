@@ -297,6 +297,9 @@ export class DevOpsApiError extends Error {
   }
 }
 
+/** Ceiling on the org-level work item lookup, which callers await inline. */
+const ORG_LOOKUP_TIMEOUT_MS = 15_000;
+
 export class AzureDevOpsService {
   private accessToken: string;
   private organization: string;
@@ -552,9 +555,12 @@ export class AzureDevOpsService {
       fields && fields.length > 0
         ? `fields=${fields.map(encodeURIComponent).join(',')}`
         : `$expand=all`;
+    // The PATCH handler awaits this before it can do anything, so a request
+    // that never settles leaves the whole type change hanging. AbortSignal
+    // .timeout needs no manual clear-up, unlike a setTimeout'd controller.
     const response = await fetch(
       `${this.baseUrl}/_apis/wit/workitems/${workItemId}?${selector}&api-version=7.1`,
-      { headers: this.headers }
+      { headers: this.headers, signal: AbortSignal.timeout(ORG_LOOKUP_TIMEOUT_MS) }
     );
     if (response.status === 404) return null;
     if (!response.ok) {

@@ -31,7 +31,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: 'Request body must be a JSON object' }, { status: 400 });
     }
 
-    const { type, additionalFields, ...unknownKeys } = body as Record<string, unknown>;
+    const { type, project, additionalFields, ...unknownKeys } = body as Record<string, unknown>;
 
     // Say what was ignored rather than silently dropping it — a caller sending
     // a key we don't honour should learn that, not assume it took effect.
@@ -48,6 +48,15 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
     if (type.length > 128) {
       return NextResponse.json({ error: 'Type is too long' }, { status: 400 });
+    }
+
+    // `project` is accepted but not used to resolve anything. Every caller in
+    // the app sends it, so rejecting it as an unknown key would break the
+    // feature outright — but a client's idea of the owning project can be
+    // stale after a move, which is the bug this PR exists to fix (#294). The
+    // org-level lookup below stays the source of truth.
+    if (project !== undefined && typeof project !== 'string') {
+      return NextResponse.json({ error: 'project must be a string' }, { status: 400 });
     }
 
     const organization = request.headers.get('x-devops-org');
