@@ -25,6 +25,7 @@ import type {
   ClassificationNode,
 } from '@/types';
 import { parseSLAFromDescription, calculateTicketSLA, DEFAULT_SLA_LEVEL } from './sla';
+import { debugLog } from './debug';
 import {
   getMitigationFieldRef,
   getResolutionFieldRef,
@@ -209,9 +210,12 @@ export function ticketToWorkItem(ticket: Ticket): WorkItem {
     project: ticket.project,
     createdAt: ticket.createdAt,
     updatedAt: ticket.updatedAt,
-    completedWork: 0,
-    remainingWork: 0,
-    originalEstimate: 0,
+    // Carry the real hours through. These used to be hardcoded to 0, which
+    // meant the dialog on /kanban and /tickets could never show effort at all
+    // — the fields were fetched, mapped away, and then reinvented as zeros.
+    completedWork: ticket.completedWork ?? 0,
+    remainingWork: ticket.remainingWork ?? 0,
+    originalEstimate: ticket.originalEstimate ?? 0,
     assignee: ticket.assignee,
     devOpsUrl: ticket.devOpsUrl,
     tags: ticket.tags,
@@ -219,6 +223,7 @@ export function ticketToWorkItem(ticket: Ticket): WorkItem {
     resolution: ticket.resolution,
     mitigation: ticket.mitigation,
     resolvedReason: ticket.resolvedReason,
+    customerResponse: ticket.customerResponse,
     requester: ticket.requester,
     organization: ticket.organization,
   };
@@ -237,6 +242,7 @@ export function workItemToTicket(workItem: DevOpsWorkItem, organization?: Organi
     resolution: readResolutionField(fields),
     mitigation: readMitigationField(fields),
     resolvedReason: (fields['Microsoft.VSTS.Common.ResolvedReason'] as string) || undefined,
+    customerResponse: (fields['Custom.CustomerResponse'] as string) || undefined,
     status: mapStateToStatus(fields['System.State']),
     devOpsState: fields['System.State'], // Preserve original DevOps state
     workItemType: fields['System.WorkItemType'], // Azure DevOps work item type
@@ -255,8 +261,41 @@ export function workItemToTicket(workItem: DevOpsWorkItem, organization?: Organi
       workItem._links?.html?.href ||
       `${DEVOPS_BASE_URL}/${fields['System.TeamProject']}/_workitems/edit/${workItem.id}`,
     project: fields['System.TeamProject'],
+    // Effort hours. Left undefined when the field isn't set on the work item so
+    // callers can tell "not tracked" from "tracked as zero"; the UI renders
+    // either as 0h.
+    completedWork: readEffortField(fields, 'Microsoft.VSTS.Scheduling.CompletedWork'),
+    remainingWork: readEffortField(fields, 'Microsoft.VSTS.Scheduling.RemainingWork'),
+    originalEstimate: readEffortField(fields, 'Microsoft.VSTS.Scheduling.OriginalEstimate'),
     comments: [],
   };
+}
+
+/**
+ * Read a scheduling/effort field as a number.
+ *
+ * DevOps omits these fields entirely when they've never been set, and can
+ * return them as strings on some templates, so coerce and reject anything
+ * non-finite rather than letting NaN reach the UI.
+ */
+function readEffortField(fields: Record<string, unknown>, fieldRef: string): number | undefined {
+  const raw = fields[fieldRef];
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+// Thrown by AzureDevOpsService methods when the upstream DevOps API returns
+// a non-OK response. Callers can check `.status` to map to user-facing errors
+// (401/403 → permissions, 404 → not found, etc.) without parsing the message.
+export class DevOpsApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = 'DevOpsApiError';
+  }
 }
 
 export class AzureDevOpsService {
@@ -461,6 +500,10 @@ export class AzureDevOpsService {
         'Microsoft.VSTS.Common.Resolution',
         'Microsoft.VSTS.TCM.ReproSteps',
         'Microsoft.VSTS.TCM.SystemInfo',
+        'Custom.CustomerResponse',
+        'Microsoft.VSTS.Scheduling.CompletedWork',
+        'Microsoft.VSTS.Scheduling.RemainingWork',
+        'Microsoft.VSTS.Scheduling.OriginalEstimate',
       ].join(',');
       const workItemsResponse = await fetch(
         `${this.baseUrl}/_apis/wit/workitems?ids=${batch.join(',')}&fields=${fields}&api-version=7.0`,
@@ -486,7 +529,12 @@ export class AzureDevOpsService {
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch work item: ${response.statusText}`);
+      // Carry the status: callers that search every project need to tell
+      // "not in this project" apart from auth, throttling and outages.
+      throw new DevOpsApiError(
+        response.status,
+        `Failed to fetch work item: ${response.statusText}`
+      );
     }
 
     return response.json();
@@ -502,6 +550,28 @@ export class AzureDevOpsService {
     if (response.ok) return 'exists';
     if (response.status === 404) return 'not_found';
     return 'error';
+  }
+
+  // Org-level fetch of a work item with the minimal fields needed for search/preview.
+  // Unlike getWorkItem, no project name is required and tag filters do not apply,
+  // so this finds any work item the user can access (Bug, Checkpoint, Feature, etc.).
+  async findWorkItemById(workItemId: number): Promise<DevOpsWorkItem | null> {
+    const fields = [
+      'System.Id',
+      'System.Title',
+      'System.State',
+      'System.WorkItemType',
+      'System.TeamProject',
+    ].join(',');
+    const response = await fetch(
+      `${this.baseUrl}/_apis/wit/workitems/${workItemId}?fields=${fields}&api-version=7.0`,
+      { headers: this.headers }
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(`Failed to fetch work item ${workItemId}: ${response.statusText}`);
+    }
+    return response.json();
   }
 
   // Get comments for a work item
@@ -1017,6 +1087,31 @@ export class AzureDevOpsService {
     }
   }
 
+  // Delete a work item — moves it to the DevOps Recycle Bin (reversible).
+  // Pass destroy=true for a permanent, unrecoverable delete; whether the
+  // caller is allowed to do that is enforced by DevOps based on the user's
+  // role/PAT scope (no ZapDesk-side admin gate). Throws DevOpsApiError on
+  // failure so callers can branch on `.status` cleanly.
+  async deleteWorkItem(workItemId: number, destroy: boolean = false): Promise<void> {
+    const url = `${this.baseUrl}/_apis/wit/workitems/${workItemId}?destroy=${destroy ? 'true' : 'false'}&api-version=7.0`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: this.headers,
+    });
+
+    if (!response.ok) {
+      // Truncate upstream body so a verbose HTML/JSON error page can't blow up
+      // logs or echo internal details back to the client via the thrown message.
+      const rawBody = await response.text().catch(() => '');
+      const snippet = rawBody.slice(0, 200).trim();
+      const tail = rawBody.length > snippet.length ? '…' : '';
+      throw new DevOpsApiError(
+        response.status,
+        `Failed to delete work item: ${response.status} ${response.statusText}${snippet ? ` - ${snippet}${tail}` : ''}`
+      );
+    }
+  }
+
   // Change work item type (e.g., Task → Bug)
   // Azure DevOps supports this via PATCH with System.WorkItemType in the JSON patch body
   async changeWorkItemType(
@@ -1196,37 +1291,54 @@ export class AzureDevOpsService {
     state: string
   ): Promise<DevOpsWorkItem> {
     const patchDocument = [{ op: 'add', path: '/fields/System.State', value: state }];
-    const url = `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/${workItemId}?api-version=7.0`;
 
-    console.log('[devops.updateTicketState] PATCH', {
-      url,
-      projectName,
-      workItemId,
-      state,
-    });
+    debugLog('[devops.updateTicketState] PATCH', { projectName, workItemId, state });
 
-    const response = await fetch(url, {
-      method: 'PATCH',
-      headers: {
-        ...this.headers,
-        'Content-Type': 'application/json-patch+json',
-      },
-      body: JSON.stringify(patchDocument),
-    });
+    const response = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/${workItemId}?api-version=7.0`,
+      {
+        method: 'PATCH',
+        headers: {
+          ...this.headers,
+          'Content-Type': 'application/json-patch+json',
+        },
+        body: JSON.stringify(patchDocument),
+      }
+    );
 
     if (!response.ok) {
-      const errorBody = await response.text().catch(() => '<no body>');
-      console.error('[devops.updateTicketState] DevOps rejected PATCH', {
-        projectName,
-        workItemId,
-        state,
-        status: response.status,
-        statusText: response.statusText,
-        body: errorBody,
-      });
-      throw new Error(
-        `Failed to update work item ${workItemId} state to "${state}": ${response.status} ${response.statusText} — ${errorBody}`
-      );
+      // DevOps returns a structured error body for blocked transitions
+      // ("TF401320: Rule Error… transition not allowed"). Surface that so
+      // the route can pass through a clear, user-facing reason instead of
+      // collapsing it to a bare status code (issue #391).
+      let detail = response.statusText;
+      try {
+        const body = await response.text();
+        if (body) {
+          try {
+            const parsed = JSON.parse(body) as { message?: string };
+            if (parsed.message) detail = parsed.message;
+          } catch {
+            // Not JSON — most likely an HTML error page from a proxy in
+            // front of DevOps. Keep the whole thing in the server log, but
+            // only hand the client a short plain-text snippet: markup
+            // carries no usable reason and can echo infrastructure detail
+            // back to every authenticated caller.
+            console.error('[devops.updateTicketState] non-JSON error body', {
+              projectName,
+              workItemId,
+              state,
+              status: response.status,
+              body,
+            });
+            const text = body.replace(/\s+/g, ' ').trim();
+            if (text && !/[<>]/.test(text)) detail = text.slice(0, 200);
+          }
+        }
+      } catch {
+        // Body read failure — keep the status-text fallback above.
+      }
+      throw new DevOpsApiError(response.status, `Failed to update work item state: ${detail}`);
     }
 
     return response.json();
@@ -2420,18 +2532,27 @@ export class AzureDevOpsService {
     return result;
   }
 
-  // Daily Standup: fetch work items across all projects for a given date
-  // Uses org-level WIQL queries (no project scope) for performance
+  // Kanban / Standup: fetch work items across all projects for a given date.
+  // Uses org-level WIQL queries (no project scope) for performance.
   async getStandupData(
     targetDate: Date,
     stateCategories: Record<string, string>
   ): Promise<{ items: DevOpsWorkItem[] }> {
-    const dateStr = targetDate.toISOString().split('T')[0];
-
-    // "Yesterday" relative to the target date
-    const yesterday = new Date(targetDate);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toISOString().split('T')[0];
+    // Recently-done window: 7 days ending on the target date (inclusive).
+    // This matches the "recently-solved" view elsewhere in the app and ensures
+    // items moved to a done state today still appear in the Closed column on
+    // the Kanban board (issue #317).
+    // The upper bound (< nextDay) anchors the window to targetDate so historical
+    // ?date=... requests don't pick up items changed after that date.
+    // Subtract 6 (not 7) so [windowStart, nextDay) covers exactly 7 calendar
+    // days inclusive of the target day — otherwise the date-only truncation
+    // would give us 8 days.
+    const windowStart = new Date(targetDate);
+    windowStart.setDate(windowStart.getDate() - 6);
+    const sevenDaysAgoStr = windowStart.toISOString().split('T')[0];
+    const nextDay = new Date(targetDate);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const nextDayStr = nextDay.toISOString().split('T')[0];
 
     // Build state lists dynamically from categories
     const doneStates: string[] = [];
@@ -2469,15 +2590,15 @@ export class AzureDevOpsService {
       'Microsoft.VSTS.Common.Priority',
     ].join(', ');
 
-    // Query 1: Items moved to done states on the previous day
+    // Query 1: Items currently in a done state, moved there in the last 7 days
     const doneQuery = {
       query: `
         SELECT ${fields}
         FROM WorkItems
         WHERE [System.State] IN (${doneStatesList})
           AND [System.WorkItemType] IN (${allowedTypesList})
-          AND [System.ChangedDate] >= '${yesterdayStr}'
-          AND [System.ChangedDate] < '${dateStr}'
+          AND [System.ChangedDate] >= '${sevenDaysAgoStr}'
+          AND [System.ChangedDate] < '${nextDayStr}'
         ORDER BY [System.TeamProject] ASC, [System.ChangedDate] DESC
       `,
     };
@@ -2548,6 +2669,7 @@ export class AzureDevOpsService {
       'System.Tags',
       'System.IterationPath',
       'Microsoft.VSTS.Common.Priority',
+      'Microsoft.VSTS.Scheduling.RemainingWork',
     ].join(',');
 
     for (let i = 0; i < workItemIds.length; i += batchSize) {

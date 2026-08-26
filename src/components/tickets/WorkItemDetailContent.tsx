@@ -9,6 +9,8 @@ import {
   hasMitigationField,
   hasResolutionField,
 } from '@/config/process-templates';
+import { hasTicketTag } from '@/lib/tags';
+import { rewriteAttachmentUrls } from '@/lib/attachment-utils';
 import Avatar from '../common/Avatar';
 import CommentSection from './CommentSection';
 import ZapDialog from './ZapDialog';
@@ -33,9 +35,10 @@ interface WorkItemDetailContentProps {
 }
 
 const formatHours = (hours: number) => {
-  if (hours === 0) return '0';
-  if (hours < 1) return hours.toFixed(1);
-  return Math.round(hours).toString();
+  // Whole hours read cleanly as "8"; anything else keeps one decimal so a
+  // half-hour estimate isn't rounded away (StandupKanbanCard does the same).
+  if (Number.isInteger(hours)) return hours.toString();
+  return hours.toFixed(1);
 };
 
 function ResolutionField({
@@ -133,7 +136,7 @@ function ResolutionField({
         <div
           className="prose prose-sm prose-invert user-content max-w-none"
           style={{ color: 'var(--text-secondary)' }}
-          dangerouslySetInnerHTML={{ __html: workItem.resolution }}
+          dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(workItem.resolution) }}
         />
       ) : (
         <button
@@ -272,6 +275,11 @@ export default function WorkItemDetailContent({
   const templateConfig = getTemplateConfig(processTemplate);
   const showResolution = hasResolutionField(workItem.workItemType, templateConfig);
   const showMitigation = hasMitigationField(workItem.workItemType, templateConfig);
+  // Internal work items (no "ticket" tag) have no customer-facing surface, so
+  // the comment helper should drop the "visible to customers" wording (#372).
+  // Default to true when tags are missing so we don't accidentally hide ticket
+  // copy from a real ticket whose details haven't fully loaded yet.
+  const isTicket = workItem.tags ? hasTicketTag(workItem.tags) : true;
 
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -401,7 +409,9 @@ export default function WorkItemDetailContent({
                 className="prose prose-sm prose-invert user-content max-w-none"
                 style={{ color: 'var(--text-secondary)' }}
                 dangerouslySetInnerHTML={{
-                  __html: workItem.description || '<em>No description provided</em>',
+                  __html: workItem.description
+                    ? rewriteAttachmentUrls(workItem.description)
+                    : '<em>No description provided</em>',
                 }}
               />
             </div>
@@ -426,7 +436,7 @@ export default function WorkItemDetailContent({
             <div
               className="prose prose-sm prose-invert user-content max-w-none"
               style={{ color: 'var(--text-secondary)' }}
-              dangerouslySetInnerHTML={{ __html: workItem.description }}
+              dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(workItem.description) }}
             />
           ) : (
             <p className="text-sm italic" style={{ color: 'var(--text-muted)' }}>
@@ -436,49 +446,62 @@ export default function WorkItemDetailContent({
         </div>
       )}
 
+      {/* Customer Response — Question work items only (issue #398) */}
+      {workItem.workItemType === 'Question' && workItem.customerResponse && (
+        <div className="card mt-4 p-4">
+          <h3 className="mb-2 text-sm font-medium" style={{ color: 'var(--text-muted)' }}>
+            Customer Response
+          </h3>
+          <div
+            className="prose prose-sm prose-invert user-content max-w-none"
+            style={{ color: 'var(--text-secondary)' }}
+            dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(workItem.customerResponse) }}
+          />
+        </div>
+      )}
+
       {/* Resolution (editable) - only for work item types that support it */}
       {showResolution && <ResolutionField workItem={workItem} onUpdate={onUpdate} />}
       {showMitigation && <MitigationField workItem={workItem} onUpdate={onUpdate} />}
 
-      {/* Effort tracking */}
-      {showEffortTracking &&
-        (workItem.completedWork > 0 ||
-          workItem.remainingWork > 0 ||
-          workItem.originalEstimate > 0) && (
-          <div className="card mt-4 p-4">
-            <h3 className="mb-3 text-sm font-medium" style={{ color: 'var(--text-muted)' }}>
-              Effort Tracking
-            </h3>
-            <div className="flex gap-6">
-              <div>
-                <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-                  Completed
-                </span>
-                <span className="text-lg font-bold" style={{ color: 'var(--primary)' }}>
-                  {formatHours(workItem.completedWork)}h
-                </span>
-              </div>
-              <div>
-                <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-                  Remaining
-                </span>
-                <span className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
-                  {formatHours(workItem.remainingWork)}h
-                </span>
-              </div>
-              {workItem.originalEstimate > 0 && (
-                <div>
-                  <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-                    Estimate
-                  </span>
-                  <span className="text-lg font-bold" style={{ color: 'var(--text-secondary)' }}>
-                    {formatHours(workItem.originalEstimate)}h
-                  </span>
-                </div>
-              )}
+      {/* Effort tracking. Shown whenever the caller enables it, including when
+          the hours are unset — "Remaining 0h" is information, an absent panel
+          reads as "this work item doesn't track effort". */}
+      {showEffortTracking && (
+        <div className="card mt-4 p-4">
+          <h3 className="mb-3 text-sm font-medium" style={{ color: 'var(--text-muted)' }}>
+            Effort Tracking
+          </h3>
+          <div className="flex gap-6">
+            <div>
+              <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
+                Completed
+              </span>
+              <span className="text-lg font-bold" style={{ color: 'var(--primary)' }}>
+                {formatHours(workItem.completedWork)}h
+              </span>
             </div>
+            <div>
+              <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
+                Remaining
+              </span>
+              <span className="text-lg font-bold" style={{ color: 'var(--text-primary)' }}>
+                {formatHours(workItem.remainingWork)}h
+              </span>
+            </div>
+            {workItem.originalEstimate > 0 && (
+              <div>
+                <span className="block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
+                  Estimate
+                </span>
+                <span className="text-lg font-bold" style={{ color: 'var(--text-secondary)' }}>
+                  {formatHours(workItem.originalEstimate)}h
+                </span>
+              </div>
+            )}
           </div>
-        )}
+        </div>
+      )}
 
       {/* Comments */}
       {compact ? (
@@ -494,6 +517,7 @@ export default function WorkItemDetailContent({
             assignee={workItem.assignee}
             onZapClick={() => setIsZapDialogOpen(true)}
             compact
+            isTicket={isTicket}
           />
         </div>
       ) : (
@@ -504,6 +528,7 @@ export default function WorkItemDetailContent({
           onUploadAttachment={onUploadAttachment}
           assignee={workItem.assignee}
           onZapClick={() => setIsZapDialogOpen(true)}
+          isTicket={isTicket}
         />
       )}
 

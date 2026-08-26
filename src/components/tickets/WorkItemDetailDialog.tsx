@@ -2,12 +2,14 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { ExternalLink, ChevronDown, Loader2, Maximize2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { ExternalLink, ChevronDown, Loader2, Maximize2, Trash2 } from 'lucide-react';
 import type { WorkItem, TicketComment, Attachment } from '@/types';
 import StatusBadge from '../common/StatusBadge';
 import TicketDialogShell from './TicketDialogShell';
 import { useWorkItemActions } from '@/hooks/useWorkItemActions';
 import { useDevOpsApi } from '@/hooks/useDevOpsApi';
+import { hasTicketTag } from '@/lib/tags';
 import WorkItemDetailContent from './WorkItemDetailContent';
 import WorkItemDetailSidebar from './WorkItemDetailSidebar';
 import TypeChangeRequiredFields from './TypeChangeRequiredFields';
@@ -28,7 +30,7 @@ interface WorkItemDetailDialogProps {
   onTagsChange?: (workItemId: number, tags: string[]) => Promise<void>;
   onUpdate?: (
     workItemId: number,
-    updates: { title?: string; description?: string; resolution?: string }
+    updates: { title?: string; description?: string; resolution?: string; mitigation?: string }
   ) => Promise<void>;
 }
 
@@ -50,6 +52,40 @@ export default function WorkItemDetailDialog({
   // Comments state (dialog fetches its own comments)
   const [comments, setComments] = useState<TicketComment[]>([]);
   const [isLoadingComments, setIsLoadingComments] = useState(false);
+
+  // Delete (Recycle Bin) state — issue #374
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDelete = useCallback(async () => {
+    if (!workItem || isDeleting) return;
+    // Bail before showing the confirm — fetchDevOps would throw "No organization
+    // selected" anyway, but only after the user committed to the action.
+    if (!hasOrganization) {
+      toast.error('Select an organization before deleting');
+      return;
+    }
+    const confirmed = window.confirm(
+      `Move "${workItem.title}" (#${workItem.id}) to the DevOps Recycle Bin?\n\nIt will be removed from ZapDesk views. You can restore it from the DevOps Recycle Bin if needed.`
+    );
+    if (!confirmed) return;
+    setIsDeleting(true);
+    try {
+      const response = await fetchDevOps(`/api/devops/tickets/${workItem.id}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete');
+      }
+      toast.success(`Deleted #${workItem.id}`);
+      onDeleted?.(workItem.id);
+      onClose();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete');
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [workItem, isDeleting, hasOrganization, fetchDevOps, onDeleted, onClose]);
 
   // Bind workItemId into callbacks for the hook
   const boundStateChange = useCallback(
@@ -126,16 +162,41 @@ export default function WorkItemDetailDialog({
   const handleAddComment = useCallback(
     async (comment: string) => {
       if (!workItem || !hasOrganization) return;
-      const response = await fetchDevOps(`/api/devops/tickets/${workItem.id}/comments`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comment }),
-      });
-      if (response.ok) {
+      try {
+        const response = await fetchDevOps(`/api/devops/tickets/${workItem.id}/comments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ comment }),
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || 'Failed to add comment');
+        }
         await fetchComments();
+        toast.success('Comment added');
+      } catch (error) {
+        // Re-throw so CommentSection keeps the unsent text in the input
+        // instead of clearing it on a silent failure.
+        console.error('Failed to add comment:', error);
+        toast.error(error instanceof Error ? error.message : 'Failed to add comment');
+        throw error;
       }
     },
     [workItem, fetchComments, fetchDevOps, hasOrganization]
+  );
+
+  const handleZapSent = useCallback(
+    async (amount: number) => {
+      if (!workItem) return;
+      const assigneeName = workItem.assignee?.displayName || 'the agent';
+      const zapMessage = `⚡ Sent a ${amount.toLocaleString()} sat zap to ${assigneeName} for great support!`;
+      try {
+        await handleAddComment(zapMessage);
+      } catch (err) {
+        console.error('[WorkItemDetailDialog] Failed to post zap comment:', err);
+      }
+    },
+    [workItem, handleAddComment]
   );
 
   const handleUploadAttachment = useCallback(
@@ -158,7 +219,12 @@ export default function WorkItemDetailDialog({
   );
 
   const handleUpdate = useCallback(
-    async (updates: { title?: string; description?: string; resolution?: string }) => {
+    async (updates: {
+      title?: string;
+      description?: string;
+      resolution?: string;
+      mitigation?: string;
+    }) => {
       if (!workItem || !onUpdate) return;
       await onUpdate(workItem.id, updates);
     },
@@ -294,7 +360,11 @@ export default function WorkItemDetailDialog({
     <>
       <button
         onClick={() => {
-          router.push(`/tickets/${workItem.id}`);
+          // Internal work items (no "ticket" tag) live at /workitems/[id]
+          // so the sidebar doesn't highlight Tickets (issue #372). Default
+          // to ticket routing when tags aren't loaded yet.
+          const isTicket = workItem.tags ? hasTicketTag(workItem.tags) : true;
+          router.push(`${isTicket ? '/tickets' : '/workitems'}/${workItem.id}`);
           onClose();
         }}
         className="flex items-center gap-1 rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-[var(--surface-hover)]"
@@ -313,6 +383,18 @@ export default function WorkItemDetailDialog({
       >
         DevOps <ExternalLink size={14} />
       </a>
+      <button
+        type="button"
+        onClick={handleDelete}
+        disabled={isDeleting}
+        className="flex items-center gap-1 rounded-md px-3 py-1.5 text-sm transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+        style={{ color: '#ef4444', cursor: isDeleting ? 'not-allowed' : 'pointer' }}
+        title="Delete (move to DevOps Recycle Bin)"
+        aria-label="Delete work item"
+      >
+        {isDeleting ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+        Delete
+      </button>
     </>
   );
 
@@ -353,6 +435,7 @@ export default function WorkItemDetailDialog({
           onAddComment={handleAddComment}
           onUploadAttachment={handleUploadAttachment}
           onUpdate={onUpdate ? handleUpdate : undefined}
+          onZapSent={handleZapSent}
           showEffortTracking
           compact
         />

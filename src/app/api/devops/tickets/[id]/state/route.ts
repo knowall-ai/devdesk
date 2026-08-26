@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
-import { AzureDevOpsService, workItemToTicket } from '@/lib/devops';
+import { AzureDevOpsService, DevOpsApiError, workItemToTicket } from '@/lib/devops';
+import { isEmailTicket, extractRequesterEmail, sendStatusChangeNotification } from '@/lib/email';
+import { debugLog } from '@/lib/debug';
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -28,7 +30,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     const organization = request.headers.get('x-devops-org') || undefined;
     const devopsService = new AzureDevOpsService(session.accessToken, organization);
 
-    console.log('[state PATCH] incoming', {
+    debugLog('[state PATCH] incoming', {
       ticketId,
       state,
       project: body.project,
@@ -37,78 +39,90 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     // If project is provided in the body, use it directly
     if (body.project) {
+      // Snapshot old state first so the email shows the transition.
+      let oldState: string | undefined;
       try {
-        const updatedWorkItem = await devopsService.updateTicketState(
-          body.project,
-          ticketId,
-          state
-        );
-        console.log('[state PATCH] success', { ticketId, state, project: body.project });
-        const ticket = workItemToTicket(updatedWorkItem);
-        return NextResponse.json({ ticket });
-      } catch (err) {
-        console.error('[state PATCH] DevOps rejected update', {
-          ticketId,
-          state,
-          project: body.project,
-          error: err instanceof Error ? err.message : err,
-        });
-        const message = err instanceof Error ? err.message : 'Failed to update ticket state';
-        return NextResponse.json({ error: message }, { status: 400 });
+        const existing = await devopsService.getWorkItem(body.project, ticketId);
+        oldState = existing?.fields?.['System.State'];
+      } catch {
+        // Continue without old state — the transition message will say "Unknown".
       }
+
+      const updatedWorkItem = await devopsService.updateTicketState(body.project, ticketId, state);
+      notifyStateChange(updatedWorkItem, ticketId, oldState || 'Unknown', state);
+      const ticket = workItemToTicket(updatedWorkItem);
+      return NextResponse.json({ ticket });
     }
 
     // Fallback: search all projects to find the ticket
     const projects = await devopsService.getProjects();
 
     for (const project of projects) {
+      let workItem;
       try {
-        const workItem = await devopsService.getWorkItem(project.name, ticketId);
-        if (workItem) {
-          try {
-            const updatedWorkItem = await devopsService.updateTicketState(
-              project.name,
-              ticketId,
-              state
-            );
-            console.log('[state PATCH] success (fallback project lookup)', {
-              ticketId,
-              state,
-              project: project.name,
-            });
-
-            const ticket = workItemToTicket(updatedWorkItem, {
-              id: project.id,
-              name: project.name,
-              devOpsProject: project.name,
-              devOpsOrg: organization || '',
-              tags: [],
-              createdAt: new Date(),
-              updatedAt: new Date(),
-            });
-
-            return NextResponse.json({ ticket });
-          } catch (err) {
-            console.error('[state PATCH] DevOps rejected update (fallback)', {
-              ticketId,
-              state,
-              project: project.name,
-              error: err instanceof Error ? err.message : err,
-            });
-            const message = err instanceof Error ? err.message : 'Failed to update ticket state';
-            return NextResponse.json({ error: message }, { status: 400 });
-          }
-        }
-      } catch {
-        // Ticket not in this project, continue
-        continue;
+        workItem = await devopsService.getWorkItem(project.name, ticketId);
+      } catch (lookupError) {
+        // Only a genuine 404 means "not in this project" — 401/429/5xx are
+        // real failures and must not be reported as a missing ticket. The
+        // update below never falls through here either, or a rejected
+        // transition would surface as "Ticket not found" (issue #391).
+        if (lookupError instanceof DevOpsApiError && lookupError.status === 404) continue;
+        throw lookupError;
       }
+      if (!workItem) continue;
+
+      const oldState = workItem.fields?.['System.State'] || 'Unknown';
+
+      const updatedWorkItem = await devopsService.updateTicketState(project.name, ticketId, state);
+
+      notifyStateChange(updatedWorkItem, ticketId, oldState, state);
+
+      const ticket = workItemToTicket(updatedWorkItem, {
+        id: project.id,
+        name: project.name,
+        devOpsProject: project.name,
+        devOpsOrg: organization || '',
+        tags: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      });
+
+      return NextResponse.json({ ticket });
     }
 
-    console.warn('[state PATCH] ticket not found in any project', { ticketId });
     return NextResponse.json({ error: 'Ticket not found' }, { status: 404 });
   } catch (error) {
-    console.error('[state PATCH] unexpected error', error);
+    console.error('Error updating ticket state:', error);
+    // Pass through the upstream message for blocked state transitions and
+    // similar workflow errors — collapsing everything to a generic 500
+    // means the UI can't tell the user *why* the drag failed (issue #391).
+    if (error instanceof DevOpsApiError) {
+      // 400/409 are workflow rejections; 401/403/404 are auth, permission and
+      // missing-item failures the client can act on — anything else is genuinely
+      // ours to own, so it stays a 500.
+      const passThrough = [400, 401, 403, 404, 409];
+      const status = passThrough.includes(error.status) ? error.status : 500;
+      return NextResponse.json({ error: error.message }, { status });
+    }
     return NextResponse.json({ error: 'Failed to update ticket state' }, { status: 500 });
   }
+}
+
+/** Fire-and-forget email notification for state changes on email-created tickets. */
+function notifyStateChange(
+  workItem: { fields?: Record<string, unknown> },
+  ticketId: number,
+  oldState: string,
+  newState: string
+) {
+  const tags = String(workItem.fields?.['System.Tags'] || '');
+  if (!isEmailTicket(tags)) return;
+
+  const requesterEmail = extractRequesterEmail(tags);
+  if (!requesterEmail) return;
+
+  const subject = String(workItem.fields?.['System.Title'] || 'Your ticket');
+  sendStatusChangeNotification(ticketId, subject, requesterEmail, oldState, newState).catch(
+    () => {}
+  );
 }

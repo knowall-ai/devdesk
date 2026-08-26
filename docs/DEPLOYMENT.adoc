@@ -24,7 +24,7 @@ ZapDesk is deployed to Azure App Service using GitHub Actions for CI/CD.
 3. Enter name: "ZapDesk"
 4. Select "Accounts in any organizational directory" (for multi-tenant)
 5. Add redirect URIs:
-   - `http://localhost:3000/api/auth/callback/azure-ad` (development)
+   - `http://localhost:3102/api/auth/callback/azure-ad` (development, the port `bun run dev` binds)
    - `https://zapdesk.yourdomain.com/api/auth/callback/azure-ad` (production)
 6. Click "Register"
 

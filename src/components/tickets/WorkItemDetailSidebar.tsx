@@ -18,6 +18,7 @@ import type { WorkItemActions } from '@/hooks/useWorkItemActions';
 import Avatar from '../common/Avatar';
 import PriorityIndicator from '../common/PriorityIndicator';
 import { useClickOutside } from '@/hooks';
+import { assigneeIdentity } from '@/lib/assignee';
 import { useCallback, useState } from 'react';
 
 interface WorkItemDetailSidebarProps {
@@ -41,9 +42,10 @@ const priorityOptions: Array<{ value: number; label: TicketPriority }> = [
 ];
 
 const formatHours = (hours: number) => {
-  if (hours === 0) return '0';
-  if (hours < 1) return hours.toFixed(1);
-  return Math.round(hours).toString();
+  // Whole hours read cleanly as "8"; anything else keeps one decimal so a
+  // half-hour estimate isn't rounded away (StandupKanbanCard does the same).
+  if (Number.isInteger(hours)) return hours.toString();
+  return hours.toFixed(1);
 };
 
 export default function WorkItemDetailSidebar({
@@ -212,7 +214,7 @@ export default function WorkItemDetailSidebar({
                 actions.filteredMembers.map((member) => (
                   <button
                     key={member.id}
-                    onClick={() => actions.handleAssigneeSelect(member.email || member.id)}
+                    onClick={() => actions.handleAssigneeSelect(assigneeIdentity(member))}
                     className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
                     style={{
                       color: 'var(--text-primary)',
@@ -487,8 +489,9 @@ export default function WorkItemDetailSidebar({
         </div>
       </div>
 
-      {/* Hours Summary - for work items */}
-      {showEffortHours && (workItem.completedWork > 0 || workItem.remainingWork > 0) && (
+      {/* Hours Summary - for work items. Rendered even when the hours are unset,
+          so "0h remaining" is stated rather than the row vanishing. */}
+      {showEffortHours && (
         <div>
           <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
             Hours

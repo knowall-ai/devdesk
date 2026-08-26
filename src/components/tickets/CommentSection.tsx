@@ -5,6 +5,7 @@ import { format } from 'date-fns';
 import { Send, Zap, Paperclip, Loader2 } from 'lucide-react';
 import Avatar from '@/components/common/Avatar';
 import MentionInput from '@/components/common/MentionInput';
+import { rewriteAttachmentUrls, buildAttachmentProxyUrl } from '@/lib/attachment-utils';
 import type { TicketComment, User, Attachment } from '@/types';
 
 interface CommentSectionProps {
@@ -15,6 +16,9 @@ interface CommentSectionProps {
   assignee?: User | null;
   onZapClick?: () => void;
   compact?: boolean;
+  // false → internal work item (no customer-facing copy). Defaults to true
+  // so existing callers keep their ticket-style helper text.
+  isTicket?: boolean;
 }
 
 export default function CommentSection({
@@ -25,6 +29,7 @@ export default function CommentSection({
   assignee,
   onZapClick,
   compact = false,
+  isTicket = true,
 }: CommentSectionProps) {
   const [newComment, setNewComment] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -80,12 +85,8 @@ export default function CommentSection({
         const orgMatch = attachment.url?.match(/dev\.azure\.com\/([^/]+)/);
         const attachmentId = idMatch ? idMatch[1] : null;
         const org = orgMatch ? orgMatch[1] : '';
-        const params = new URLSearchParams({
-          fileName: namedFile.name,
-          ...(org && { org }),
-        });
         const imgSrc = attachmentId
-          ? `/api/devops/attachments/${attachmentId}?${params.toString()}`
+          ? buildAttachmentProxyUrl(attachmentId, namedFile.name, org)
           : attachment.url;
         const imgHtml = `<img src="${imgSrc}" alt="${namedFile.name}" />`;
         setNewComment((prev) => (prev ? `${prev}\n${imgHtml}` : imgHtml));
@@ -154,7 +155,7 @@ export default function CommentSection({
                   <div
                     className={`user-content ${compact ? 'prose prose-sm prose-invert max-w-none text-sm' : 'text-sm'}`}
                     style={{ color: 'var(--text-secondary)' }}
-                    dangerouslySetInnerHTML={{ __html: comment.content }}
+                    dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(comment.content) }}
                   />
                 </div>
               </div>
@@ -179,7 +180,9 @@ export default function CommentSection({
                   className="h-4 w-4 rounded accent-[var(--primary)]"
                 />
                 <span className="text-xs" style={{ color: 'var(--primary)' }}>
-                  Public reply – all comments are visible to customers in DevOps
+                  {isTicket
+                    ? 'Public reply – all comments are visible to customers in DevOps'
+                    : 'Comments are visible in DevOps'}
                 </span>
               </label>
             </div>

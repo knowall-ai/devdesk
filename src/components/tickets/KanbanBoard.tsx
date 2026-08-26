@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useCallback, useMemo, useEffect } from 'react';
+import { toast } from 'sonner';
 import {
   DndContext,
   DragOverlay,
@@ -19,6 +20,7 @@ import KanbanCard from './KanbanCard';
 import type { Ticket, WorkItem, WorkItemState, WorkItemType } from '@/types';
 import { ensureActiveState } from '@/types';
 import type { GroupByOption } from './WorkItemBoard';
+import { debugLog, debugWarn } from '@/lib/debug';
 
 // KanbanBoard can work with either Ticket[] or WorkItem[]
 // WorkItem uses 'state' while Ticket uses 'devOpsState' for the state name
@@ -215,7 +217,7 @@ export default function KanbanBoard({
       setActiveId(null);
 
       if (!over) {
-        console.log('[Kanban DnD] drag ended with no drop target');
+        debugLog('[Kanban DnD] drag ended with no drop target');
         return;
       }
 
@@ -225,7 +227,7 @@ export default function KanbanBoard({
       // Find the original item (from props, not local state)
       const originalItem = sourceItems.find((t) => t.id === activeItemId);
       if (!originalItem) {
-        console.warn('[Kanban DnD] active item not found in sourceItems', { activeItemId });
+        debugWarn('[Kanban DnD] active item not found in sourceItems', { activeItemId });
         return;
       }
 
@@ -242,7 +244,7 @@ export default function KanbanBoard({
       }
 
       const fromState = getItemState(originalItem);
-      console.log('[Kanban DnD] drag end', {
+      debugLog('[Kanban DnD] drag end', {
         itemId: activeItemId,
         overId,
         fromState,
@@ -260,30 +262,40 @@ export default function KanbanBoard({
       if (onTicketStateChange) {
         setIsUpdating(true);
         try {
-          console.log('[Kanban DnD] calling onTicketStateChange', {
+          debugLog('[Kanban DnD] calling onTicketStateChange', {
             itemId: activeItemId,
             fromState,
             targetState,
           });
           await onTicketStateChange(activeItemId, targetState);
-          console.log('[Kanban DnD] state change succeeded', {
+          debugLog('[Kanban DnD] state change succeeded', {
             itemId: activeItemId,
             targetState,
           });
         } catch (error) {
+          // Not gated: a rejected transition is rare and its detail is the
+          // whole point of issue #391.
           console.error('[Kanban DnD] state change failed — rolling back', {
             itemId: activeItemId,
             fromState,
             targetState,
             error,
           });
-          // Rollback on failure
+          // Rollback on failure — and surface the upstream reason. Process
+          // templates often block direct transitions (e.g. New → To Do
+          // when an intermediate state is required); without a toast the
+          // user just sees the card snap back with no explanation (#391).
           setLocalItems(sourceItems);
+          toast.error(
+            error instanceof Error && error.message
+              ? `Couldn't move to "${targetState}": ${error.message}`
+              : `Couldn't move to "${targetState}"`
+          );
         } finally {
           setIsUpdating(false);
         }
       } else {
-        console.warn('[Kanban DnD] no onTicketStateChange handler wired — change will not persist');
+        debugWarn('[Kanban DnD] no onTicketStateChange handler wired — change will not persist');
       }
     },
     [sourceItems, localItems, onTicketStateChange, stateNames]

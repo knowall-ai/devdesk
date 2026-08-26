@@ -1,6 +1,7 @@
 'use client';
 
-import { useState, useMemo, useCallback, useEffect } from 'react';
+import { useState, useMemo, useCallback } from 'react';
+import { toast } from 'sonner';
 import {
   DndContext,
   DragOverlay,
@@ -16,10 +17,19 @@ import {
 import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 import { useDroppable } from '@dnd-kit/core';
 import { sortableKeyboardCoordinates } from '@dnd-kit/sortable';
-import { ChevronDown, ChevronRight } from 'lucide-react';
+import { ChevronDown, ChevronRight, Info } from 'lucide-react';
 import StandupKanbanCard from './StandupKanbanCard';
 import { getColumnIcon, getColumnColor } from './columnConfig';
+import {
+  canTypeEnterColumn,
+  resolveStateForColumn,
+  type AllowedStates,
+} from '@/lib/kanban-columns';
 import type { StandupColumn, StandupWorkItem } from '@/types';
+
+// Done-category columns only show items changed in the last 7 days; this hint
+// explains the cutoff so users don't think older items have vanished.
+const DONE_WINDOW_HINT = 'Showing items resolved or closed in the last 7 days';
 
 /** Simple droppable column for the standup kanban */
 function DroppableColumn({
@@ -27,21 +37,44 @@ function DroppableColumn({
   category,
   items,
   activeId,
+  isBlocked = false,
+  blockedReason,
+  onItemClick,
 }: {
   name: string;
   category: string;
   items: StandupWorkItem[];
   activeId: number | null;
+  /** The dragged card's type has no state for this column — refuse the drop. */
+  isBlocked?: boolean;
+  blockedReason?: string;
+  onItemClick?: (item: StandupWorkItem) => void;
 }) {
-  const { setNodeRef, isOver } = useDroppable({ id: name });
+  const { setNodeRef, isOver } = useDroppable({ id: name, disabled: isBlocked });
   const color = getColumnColor(name, category);
+  const isDoneColumn = category === 'Resolved' || category === 'Completed';
 
   return (
-    <div className="kanban-column">
+    <div
+      className="kanban-column"
+      style={isBlocked ? { opacity: 0.4, cursor: 'not-allowed' } : undefined}
+      title={isBlocked ? blockedReason : undefined}
+    >
       <div className="kanban-column-header">
         <div className="flex items-center gap-2">
           <span style={{ color }}>{getColumnIcon(name, category)}</span>
           <h3 className="text-sm font-semibold text-[var(--text-primary)]">{name}</h3>
+          {isDoneColumn && (
+            <button
+              type="button"
+              title={DONE_WINDOW_HINT}
+              aria-label={DONE_WINDOW_HINT}
+              className="cursor-help"
+              style={{ color: 'var(--text-muted)' }}
+            >
+              <Info size={12} />
+            </button>
+          )}
         </div>
         <span className="rounded-full bg-[var(--surface-hover)] px-2 py-0.5 text-xs text-[var(--text-muted)]">
           {items.length}
@@ -54,7 +87,12 @@ function DroppableColumn({
       >
         <SortableContext items={items.map((i) => i.id)} strategy={verticalListSortingStrategy}>
           {items.map((item) => (
-            <StandupKanbanCard key={item.id} item={item} isDragging={activeId === item.id} />
+            <StandupKanbanCard
+              key={item.id}
+              item={item}
+              isDragging={activeId === item.id}
+              onClick={onItemClick}
+            />
           ))}
         </SortableContext>
 
@@ -71,13 +109,18 @@ function DroppableColumn({
 interface KanbanGroupSectionProps {
   groupName: string;
   columns: StandupColumn[];
+  /** Project -> work item type -> states that type defines there. Omit to allow every drop. */
+  allowedStatesByProjectType?: AllowedStates;
   onStateChange?: (itemId: number, targetState: string) => Promise<void>;
+  onItemClick?: (item: StandupWorkItem) => void;
 }
 
 export default function KanbanGroupSection({
   groupName,
   columns,
+  allowedStatesByProjectType,
   onStateChange,
+  onItemClick,
 }: KanbanGroupSectionProps) {
   const columnNames = useMemo(() => columns.map((c) => c.name), [columns]);
   const totalItems = useMemo(() => columns.reduce((sum, c) => sum + c.items.length, 0), [columns]);
@@ -86,23 +129,32 @@ export default function KanbanGroupSection({
   const [activeId, setActiveId] = useState<number | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
 
-  // Local state for drag-and-drop reactivity, keyed by column name
-  const [localItems, setLocalItems] = useState<Record<string, StandupWorkItem[]>>(() => {
+  // What the server last told us, keyed by column name.
+  const propItems = useMemo(() => {
     const map: Record<string, StandupWorkItem[]> = {};
     for (const col of columns) {
       map[col.name] = col.items;
     }
     return map;
-  });
-
-  // Sync with prop changes (e.g. after refresh)
-  useEffect(() => {
-    const map: Record<string, StandupWorkItem[]> = {};
-    for (const col of columns) {
-      map[col.name] = col.items;
-    }
-    setLocalItems(map);
   }, [columns]);
+
+  // Local copy so a drag can move cards optimistically before the server confirms.
+  const [localItems, setLocalItems] = useState<Record<string, StandupWorkItem[]>>(propItems);
+  const [syncedItems, setSyncedItems] = useState(propItems);
+
+  // Adopt new server data as it arrives. Done during render rather than in an
+  // effect: React restarts the render with the new state before painting, so
+  // the board never flashes the stale columns first.
+  if (syncedItems !== propItems) {
+    setSyncedItems(propItems);
+    setLocalItems(propItems);
+  }
+
+  // Roll the optimistic board back to the server's version after a drag that
+  // didn't stick, or one we never sent.
+  const syncFromProps = useCallback(() => {
+    setLocalItems(propItems);
+  }, [propItems]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
@@ -131,6 +183,24 @@ export default function KanbanGroupSection({
     }
     return null;
   }, [activeId, localItems, columnNames]);
+
+  // Columns the dragged card can't enter, because its work item type defines no
+  // matching state. Empty while nothing is being dragged, and empty whenever we
+  // have no state list for the type — the server stays the authority (#391).
+  const blockedColumns = useMemo(() => {
+    if (!activeItem) return new Set<string>();
+    return new Set(
+      columnNames.filter(
+        (name) =>
+          !canTypeEnterColumn(
+            activeItem.project,
+            activeItem.workItemType,
+            name,
+            allowedStatesByProjectType
+          )
+      )
+    );
+  }, [activeItem, columnNames, allowedStatesByProjectType]);
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     setActiveId(event.active.id as number);
@@ -169,11 +239,7 @@ export default function KanbanGroupSection({
 
       if (!event.over || !onStateChange) {
         // Rollback visual state if no handler
-        const map: Record<string, StandupWorkItem[]> = {};
-        for (const col of columns) {
-          map[col.name] = col.items;
-        }
-        setLocalItems(map);
+        syncFromProps();
         return;
       }
 
@@ -185,33 +251,60 @@ export default function KanbanGroupSection({
       const originalCol = columns.find((c) => c.items.some((i) => i.id === activeItemId));
       if (originalCol?.name === targetCol) return; // No change
 
+      // Blocked columns are already disabled as drop targets, so this only
+      // trips if the cached state list went stale mid-session. Say so plainly
+      // rather than letting DevOps answer with a raw rule error.
+      const dragged = originalCol?.items.find((i) => i.id === activeItemId);
+      if (
+        dragged &&
+        !canTypeEnterColumn(
+          dragged.project,
+          dragged.workItemType,
+          targetCol,
+          allowedStatesByProjectType
+        )
+      ) {
+        syncFromProps();
+        toast.error(`${dragged.workItemType} work items have no "${targetCol}" state`);
+        return;
+      }
+
       setIsUpdating(true);
       try {
-        // targetCol IS the DevOps state name — pass it directly
-        await onStateChange(activeItemId, targetCol);
+        // The column label is not necessarily the state name — "To Do" is the
+        // state "Todo" in the KnowAll process — so translate before writing.
+        await onStateChange(
+          activeItemId,
+          resolveStateForColumn(
+            dragged?.project,
+            dragged?.workItemType,
+            targetCol,
+            allowedStatesByProjectType
+          )
+        );
       } catch (error) {
         console.error('Failed to update state:', error);
-        // Rollback
-        const map: Record<string, StandupWorkItem[]> = {};
-        for (const col of columns) {
-          map[col.name] = col.items;
-        }
-        setLocalItems(map);
+        syncFromProps();
+        // Surface the upstream reason. A work item can only enter states its
+        // own work item type defines, so drops onto a column the type has no
+        // state for are rejected by DevOps ("TF401320: Rule Error…"). Without
+        // this toast the card just snaps back with no explanation (#391, #366).
+        toast.error(
+          error instanceof Error && error.message
+            ? `Couldn't move to "${targetCol}": ${error.message}`
+            : `Couldn't move to "${targetCol}"`
+        );
       } finally {
         setIsUpdating(false);
       }
     },
-    [onStateChange, findColumn, columns]
+    [onStateChange, findColumn, columns, allowedStatesByProjectType, syncFromProps]
   );
 
   const handleDragCancel = useCallback(() => {
     setActiveId(null);
-    const map: Record<string, StandupWorkItem[]> = {};
-    for (const col of columns) {
-      map[col.name] = col.items;
-    }
-    setLocalItems(map);
-  }, [columns]);
+    syncFromProps();
+  }, [syncFromProps]);
 
   return (
     <div className="card overflow-hidden">
@@ -254,6 +347,7 @@ export default function KanbanGroupSection({
             <div className="kanban-columns" style={{ padding: '0.75rem' }}>
               {columns.map((col) => {
                 const items = localItems[col.name] || [];
+                const isBlocked = blockedColumns.has(col.name);
                 return (
                   <DroppableColumn
                     key={col.name}
@@ -261,6 +355,13 @@ export default function KanbanGroupSection({
                     category={col.category}
                     items={items}
                     activeId={activeId}
+                    isBlocked={isBlocked}
+                    blockedReason={
+                      isBlocked && activeItem
+                        ? `${activeItem.workItemType} work items have no "${col.name}" state`
+                        : undefined
+                    }
+                    onItemClick={onItemClick}
                   />
                 );
               })}
