@@ -59,6 +59,7 @@ import {
 } from '@/config/process-templates';
 import { useClickOutside } from '@/hooks';
 import { useDevOpsApi } from '@/hooks/useDevOpsApi';
+import { assigneeIdentity } from '@/lib/assignee';
 
 type DetailTab = 'details' | 'history';
 
@@ -1512,7 +1513,7 @@ export default function TicketDetail({
                       filteredMembers.map((member) => (
                         <button
                           key={member.id}
-                          onClick={() => handleAssigneeSelect(member.email || member.id)}
+                          onClick={() => handleAssigneeSelect(assigneeIdentity(member))}
                           className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
                           style={{ color: 'var(--text-primary)', cursor: 'pointer' }}
                         >
