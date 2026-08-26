@@ -564,7 +564,11 @@ export class AzureDevOpsService {
       let detail = '';
       try {
         const body = await response.text();
-        if (body) detail = `: ${body.slice(0, 500)}`;
+        // DevOps can answer with an HTML error page, and this message is
+        // returned to the client by the type route — take the body only when
+        // it reads like a plain message, and keep it short.
+        const text = body.replace(/\s+/g, ' ').trim();
+        if (text && !/[<>]/.test(text)) detail = `: ${text.slice(0, 200)}`;
       } catch {
         // ignore — body read shouldn't mask the underlying HTTP failure
       }
@@ -591,22 +595,16 @@ export class AzureDevOpsService {
   // Unlike getWorkItem, no project name is required and tag filters do not apply,
   // so this finds any work item the user can access (Bug, Checkpoint, Feature, etc.).
   async findWorkItemById(workItemId: number): Promise<DevOpsWorkItem | null> {
-    const fields = [
+    // Same org-level lookup as getWorkItemByIdOrgLevel, so it delegates rather
+    // than keeping a second copy that drifts — this one used to throw with
+    // only statusText, losing the reason DevOps gave.
+    return this.getWorkItemByIdOrgLevel(workItemId, [
       'System.Id',
       'System.Title',
       'System.State',
       'System.WorkItemType',
       'System.TeamProject',
-    ].join(',');
-    const response = await fetch(
-      `${this.baseUrl}/_apis/wit/workitems/${workItemId}?fields=${fields}&api-version=7.0`,
-      { headers: this.headers }
-    );
-    if (response.status === 404) return null;
-    if (!response.ok) {
-      throw new Error(`Failed to fetch work item ${workItemId}: ${response.statusText}`);
-    }
-    return response.json();
+    ]);
   }
 
   // Get comments for a work item

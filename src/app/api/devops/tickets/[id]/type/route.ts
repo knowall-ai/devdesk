@@ -19,11 +19,35 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
       return NextResponse.json({ error: 'Invalid ticket ID' }, { status: 400 });
     }
 
-    const body = await request.json();
-    const { type, additionalFields } = body;
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Request body must be JSON' }, { status: 400 });
+    }
 
-    if (!type) {
+    // A null or array body used to reach the destructure and surface as a 500.
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Request body must be a JSON object' }, { status: 400 });
+    }
+
+    const { type, additionalFields, ...unknownKeys } = body as Record<string, unknown>;
+
+    // Say what was ignored rather than silently dropping it — a caller sending
+    // a key we don't honour should learn that, not assume it took effect.
+    const unknown = Object.keys(unknownKeys);
+    if (unknown.length > 0) {
+      return NextResponse.json(
+        { error: `Unexpected field(s) in request body: ${unknown.join(', ')}` },
+        { status: 400 }
+      );
+    }
+
+    if (typeof type !== 'string' || type.trim().length === 0) {
       return NextResponse.json({ error: 'Type is required' }, { status: 400 });
+    }
+    if (type.length > 128) {
+      return NextResponse.json({ error: 'Type is too long' }, { status: 400 });
     }
 
     const organization = request.headers.get('x-devops-org');
@@ -41,24 +65,51 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
 
     const devopsService = new AzureDevOpsService(session.accessToken, organization);
 
-    // Validate additionalFields if provided — only allow safe field prefixes
+    // Validate additionalFields if provided — only allow safe field prefixes.
+    // Rejecting beats filtering: a caller who sends a forbidden field should
+    // get an error, not a successful type change with their field quietly
+    // dropped.
     let validatedAdditionalFields: Record<string, string | number> | undefined;
-    if (additionalFields && typeof additionalFields === 'object') {
+    if (additionalFields !== undefined) {
+      if (
+        typeof additionalFields !== 'object' ||
+        additionalFields === null ||
+        Array.isArray(additionalFields)
+      ) {
+        return NextResponse.json(
+          { error: 'additionalFields must be a JSON object' },
+          { status: 400 }
+        );
+      }
+
       const ALLOWED_PREFIXES = ['Custom.', 'Microsoft.VSTS.'];
-      const DENIED_PREFIXES = ['System.'];
-      const filtered: Record<string, string | number> = {};
+      const accepted: Record<string, string | number> = {};
+      const rejected: string[] = [];
 
       for (const [key, value] of Object.entries(additionalFields)) {
-        if (typeof key !== 'string' || key.includes('/') || key.includes('\\')) continue;
-        if (DENIED_PREFIXES.some((p) => key.startsWith(p))) continue;
-        if (!ALLOWED_PREFIXES.some((p) => key.startsWith(p))) continue;
-        if (typeof value === 'string' || typeof value === 'number') {
-          filtered[key] = value;
+        const keyAllowed =
+          !key.includes('/') &&
+          !key.includes('\\') &&
+          ALLOWED_PREFIXES.some((p) => key.startsWith(p));
+        const valueAllowed = typeof value === 'string' || typeof value === 'number';
+        if (keyAllowed && valueAllowed) {
+          accepted[key] = value as string | number;
+        } else {
+          rejected.push(key);
         }
       }
 
-      if (Object.keys(filtered).length > 0) {
-        validatedAdditionalFields = filtered;
+      if (rejected.length > 0) {
+        return NextResponse.json(
+          {
+            error: `Field(s) not permitted here: ${rejected.join(', ')}. Allowed prefixes: ${ALLOWED_PREFIXES.join(', ')}; values must be a string or number.`,
+          },
+          { status: 400 }
+        );
+      }
+
+      if (Object.keys(accepted).length > 0) {
+        validatedAdditionalFields = accepted;
       }
     }
 
