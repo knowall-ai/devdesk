@@ -9,13 +9,16 @@ import {
   Loader2,
   User as UserIcon,
   Timer,
+  X,
+  Plus,
+  Tag,
 } from 'lucide-react';
-import type { WorkItem, TicketPriority } from '@/types';
+import type { WorkItem, TicketPriority, WorkItemType } from '@/types';
 import type { WorkItemActions } from '@/hooks/useWorkItemActions';
 import Avatar from '../common/Avatar';
 import PriorityIndicator from '../common/PriorityIndicator';
 import { useClickOutside } from '@/hooks';
-import { useCallback } from 'react';
+import { useCallback, useState } from 'react';
 
 interface WorkItemDetailSidebarProps {
   workItem: WorkItem;
@@ -25,6 +28,9 @@ interface WorkItemDetailSidebarProps {
   showEffortHours?: boolean;
   canEditAssignee?: boolean;
   canEditPriority?: boolean;
+  canEditType?: boolean;
+  canEditTags?: boolean;
+  onTagsChange?: (tags: string[]) => Promise<void>;
 }
 
 const priorityOptions: Array<{ value: number; label: TicketPriority }> = [
@@ -35,9 +41,10 @@ const priorityOptions: Array<{ value: number; label: TicketPriority }> = [
 ];
 
 const formatHours = (hours: number) => {
-  if (hours === 0) return '0';
-  if (hours < 1) return hours.toFixed(1);
-  return Math.round(hours).toString();
+  // Whole hours read cleanly as "8"; anything else keeps one decimal so a
+  // half-hour estimate isn't rounded away (StandupKanbanCard does the same).
+  if (Number.isInteger(hours)) return hours.toString();
+  return hours.toFixed(1);
 };
 
 export default function WorkItemDetailSidebar({
@@ -48,7 +55,47 @@ export default function WorkItemDetailSidebar({
   showEffortHours = false,
   canEditAssignee = true,
   canEditPriority = true,
+  canEditType = false,
+  canEditTags = false,
+  onTagsChange,
 }: WorkItemDetailSidebarProps) {
+  const [newTag, setNewTag] = useState('');
+  const [isAddingTag, setIsAddingTag] = useState(false);
+  const [isSavingTags, setIsSavingTags] = useState(false);
+
+  const tagsEditable = canEditTags && !!onTagsChange;
+
+  const handleAddTag = async () => {
+    const tag = newTag.trim();
+    if (!tag || !onTagsChange || isSavingTags) return;
+    const currentTags = workItem.tags || [];
+    if (currentTags.includes(tag)) {
+      setNewTag('');
+      setIsAddingTag(false);
+      return;
+    }
+    setIsSavingTags(true);
+    try {
+      await onTagsChange([...currentTags, tag]);
+      setNewTag('');
+      setIsAddingTag(false);
+    } finally {
+      setIsSavingTags(false);
+    }
+  };
+
+  const handleRemoveTag = async (tagToRemove: string) => {
+    if (!onTagsChange || isSavingTags) return;
+    // Prevent removing the "ticket" tag
+    if (tagToRemove.toLowerCase() === 'ticket') return;
+    const currentTags = workItem.tags || [];
+    setIsSavingTags(true);
+    try {
+      await onTagsChange(currentTags.filter((t) => t !== tagToRemove));
+    } finally {
+      setIsSavingTags(false);
+    }
+  };
   const closeAssigneeDropdown = useCallback(() => {
     actions.setIsAssigneeDropdownOpen(false);
     actions.setAssigneeSearch('');
@@ -67,8 +114,15 @@ export default function WorkItemDetailSidebar({
     actions.isPriorityDropdownOpen
   );
 
+  const closeTypeDropdown = useCallback(() => actions.setIsTypeDropdownOpen(false), [actions]);
+  const typeDropdownRef = useClickOutside<HTMLDivElement>(
+    closeTypeDropdown,
+    actions.isTypeDropdownOpen
+  );
+
   const assigneeEditable = canEditAssignee && !!actions.handleAssigneeSelect;
   const priorityEditable = canEditPriority && !!actions.handlePrioritySelect;
+  const typeEditable = canEditType && !!actions.handleTypeSelect;
 
   return (
     <div className="space-y-4">
@@ -247,6 +301,78 @@ export default function WorkItemDetailSidebar({
         )}
       </div>
 
+      {/* Type - Editable */}
+      {workItem.workItemType && (
+        <div className="relative" ref={typeDropdownRef}>
+          <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
+            Type
+          </label>
+          {typeEditable ? (
+            <>
+              <button
+                onClick={() => actions.setIsTypeDropdownOpen(!actions.isTypeDropdownOpen)}
+                disabled={actions.isUpdatingType}
+                className="flex w-full cursor-pointer items-center justify-between rounded p-2 text-left transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {actions.isUpdatingType ? (
+                  <div className="flex items-center gap-2">
+                    <Loader2 size={14} className="animate-spin" />
+                    <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                      Updating...
+                    </span>
+                  </div>
+                ) : (
+                  <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                    {workItem.workItemType}
+                  </span>
+                )}
+                <ChevronDown size={14} style={{ color: 'var(--text-muted)' }} />
+              </button>
+              {actions.isTypeDropdownOpen && (
+                <div
+                  className="absolute top-full left-0 z-50 mt-1 max-h-48 w-full overflow-y-auto rounded-md shadow-lg"
+                  style={{
+                    backgroundColor: 'var(--surface)',
+                    border: '1px solid var(--border)',
+                  }}
+                >
+                  {actions.isLoadingTypes ? (
+                    <div
+                      className="flex items-center justify-center gap-2 p-3"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      <Loader2 size={14} className="animate-spin" />
+                      Loading...
+                    </div>
+                  ) : (
+                    actions.availableTypes.map((type: WorkItemType) => (
+                      <button
+                        key={type.name}
+                        onClick={() => actions.handleTypeSelect(type.name)}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                        style={{
+                          color:
+                            type.name === workItem.workItemType
+                              ? 'var(--primary)'
+                              : 'var(--text-primary)',
+                          cursor: 'pointer',
+                        }}
+                      >
+                        {type.name}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </>
+          ) : (
+            <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
+              {workItem.workItemType}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Project */}
       {workItem.project && (
         <div>
@@ -275,30 +401,96 @@ export default function WorkItemDetailSidebar({
       )}
 
       {/* Tags */}
-      {workItem.tags && workItem.tags.length > 0 && (
-        <div>
-          <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-            Tags
-          </label>
-          <div className="flex flex-wrap gap-1">
-            {workItem.tags.map((tag) => (
-              <span
-                key={tag}
-                className="rounded px-2 py-0.5 text-xs"
-                style={{
-                  backgroundColor: 'var(--surface-hover)',
-                  color: 'var(--text-secondary)',
-                }}
-              >
-                {tag}
-              </span>
-            ))}
-          </div>
+      <div>
+        <label
+          className="mb-1 flex items-center gap-1 text-xs uppercase"
+          style={{ color: 'var(--text-muted)' }}
+        >
+          <Tag size={12} />
+          Tags
+        </label>
+        <div className="flex flex-wrap gap-1">
+          {(workItem.tags || []).map((tag) => (
+            <span
+              key={tag}
+              className="flex items-center gap-1 rounded px-2 py-0.5 text-xs"
+              style={{
+                backgroundColor: 'var(--surface-hover)',
+                color: 'var(--text-secondary)',
+              }}
+            >
+              {tag}
+              {tagsEditable && tag.toLowerCase() !== 'ticket' && (
+                <button
+                  type="button"
+                  onClick={() => handleRemoveTag(tag)}
+                  disabled={isSavingTags}
+                  className="ml-0.5 rounded-full transition-colors hover:bg-[var(--surface)]"
+                  style={{ color: 'var(--text-muted)', cursor: 'pointer' }}
+                  title={`Remove tag "${tag}"`}
+                  aria-label={`Remove tag ${tag}`}
+                >
+                  <X size={10} />
+                </button>
+              )}
+            </span>
+          ))}
+          {tagsEditable && (
+            <>
+              {isAddingTag ? (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="text"
+                    value={newTag}
+                    onChange={(e) => setNewTag(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') handleAddTag();
+                      if (e.key === 'Escape') {
+                        setIsAddingTag(false);
+                        setNewTag('');
+                      }
+                    }}
+                    placeholder="New tag..."
+                    autoFocus
+                    disabled={isSavingTags}
+                    className="rounded border px-2 py-0.5 text-xs"
+                    style={{
+                      backgroundColor: 'var(--surface)',
+                      borderColor: 'var(--border)',
+                      color: 'var(--text-primary)',
+                      width: '100px',
+                    }}
+                  />
+                  {isSavingTags && (
+                    <Loader2
+                      size={12}
+                      className="animate-spin"
+                      style={{ color: 'var(--text-muted)' }}
+                    />
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={() => setIsAddingTag(true)}
+                  className="flex items-center gap-0.5 rounded px-2 py-0.5 text-xs transition-colors hover:bg-[var(--surface-hover)]"
+                  style={{
+                    color: 'var(--primary)',
+                    cursor: 'pointer',
+                    border: '1px dashed var(--border)',
+                  }}
+                >
+                  <Plus size={10} />
+                  Add
+                </button>
+              )}
+            </>
+          )}
         </div>
-      )}
+      </div>
 
-      {/* Hours Summary - for work items */}
-      {showEffortHours && (workItem.completedWork > 0 || workItem.remainingWork > 0) && (
+      {/* Hours Summary - for work items. Rendered even when the hours are unset,
+          so "0h remaining" is stated rather than the row vanishing. */}
+      {showEffortHours && (
         <div>
           <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
             Hours

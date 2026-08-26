@@ -3,6 +3,7 @@
 import { useSession } from 'next-auth/react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState, Suspense, useCallback } from 'react';
+import { toast } from 'sonner';
 import { MainLayout } from '@/components/layout';
 import { LoadingSpinner } from '@/components/common';
 import { TicketList } from '@/components/tickets';
@@ -116,17 +117,14 @@ function TicketsPageContent() {
           },
           body: JSON.stringify({ state: newState }),
         });
-
-        if (!response.ok) {
-          throw new Error('Failed to update state');
-        }
-
-        // Update local state with the new DevOps state
+        if (!response.ok) throw new Error('Failed to update state');
         setTickets((prev) =>
           prev.map((t) => (t.id === ticketId ? { ...t, devOpsState: newState } : t))
         );
+        toast.success(`Status updated to "${newState}"`);
       } catch (error) {
         console.error('Failed to update ticket state:', error);
+        toast.error('Failed to update status');
         throw error; // Re-throw so KanbanBoard can handle rollback
       }
     },
@@ -153,49 +151,203 @@ function TicketsPageContent() {
     [handleTicketStateChange]
   );
 
+  const handleDialogAssigneeChange = useCallback(
+    async (workItemId: number, assigneeId: string | null) => {
+      const ticket = tickets.find((t) => t.id === workItemId);
+      if (!ticket || !selectedOrganization) return;
+      try {
+        const response = await fetch(`/api/devops/tickets/${workItemId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-devops-org': selectedOrganization.accountName,
+          },
+          body: JSON.stringify({ assignee: assigneeId, project: ticket.project }),
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          console.error('Assignee change failed:', response.status, errorData);
+          throw new Error('Failed to update assignee');
+        }
+        const data = await response.json();
+        const updatedTicket = data.ticket;
+        if (updatedTicket) {
+          setTickets((prev) => prev.map((t) => (t.id === updatedTicket.id ? updatedTicket : t)));
+          setSelectedTicket((prev) =>
+            prev && prev.id === updatedTicket.id ? updatedTicket : prev
+          );
+        }
+        toast.success('Assignee updated');
+      } catch (error) {
+        console.error('Failed to update assignee:', error);
+        toast.error('Failed to update assignee');
+        throw error;
+      }
+    },
+    [tickets, selectedOrganization]
+  );
+
+  const handleDialogPriorityChange = useCallback(
+    async (workItemId: number, priority: number) => {
+      const ticket = tickets.find((t) => t.id === workItemId);
+      if (!ticket || !selectedOrganization) return;
+      try {
+        const response = await fetch(`/api/devops/tickets/${workItemId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-devops-org': selectedOrganization.accountName,
+          },
+          body: JSON.stringify({ priority, project: ticket.project }),
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          console.error('Priority change failed:', response.status, errorData);
+          throw new Error('Failed to update priority');
+        }
+        const data = await response.json();
+        const updatedTicket = data.ticket;
+        if (updatedTicket) {
+          setTickets((prev) => prev.map((t) => (t.id === updatedTicket.id ? updatedTicket : t)));
+          setSelectedTicket((prev) =>
+            prev && prev.id === updatedTicket.id ? updatedTicket : prev
+          );
+        }
+        toast.success('Priority updated');
+      } catch (error) {
+        console.error('Failed to update priority:', error);
+        toast.error('Failed to update priority');
+        throw error;
+      }
+    },
+    [tickets, selectedOrganization]
+  );
+
+  const handleDialogTypeChange = useCallback(
+    async (workItemId: number, newType: string, additionalFields?: Record<string, string>) => {
+      const ticket = tickets.find((t) => t.id === workItemId);
+      if (!ticket || !selectedOrganization) return;
+      try {
+        const response = await fetch(`/api/devops/tickets/${workItemId}/type`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-devops-org': selectedOrganization.accountName,
+          },
+          body: JSON.stringify({ type: newType, project: ticket.project, additionalFields }),
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          console.error('Type change failed:', response.status, errorData);
+          throw new Error(errorData.error || 'Failed to update work item type');
+        }
+        const data = await response.json();
+        const updatedTicket = data.ticket;
+        if (updatedTicket) {
+          setTickets((prev) => prev.map((t) => (t.id === updatedTicket.id ? updatedTicket : t)));
+          setSelectedTicket((prev) =>
+            prev && prev.id === updatedTicket.id ? updatedTicket : prev
+          );
+        } else {
+          // Fallback: update just the type field
+          setTickets((prev) =>
+            prev.map((t) => (t.id === workItemId ? { ...t, workItemType: newType } : t))
+          );
+          setSelectedTicket((prev) => (prev ? { ...prev, workItemType: newType } : null));
+        }
+        toast.success(`Type changed to "${newType}"`);
+      } catch (error) {
+        console.error('Failed to change work item type:', error);
+        toast.error(error instanceof Error ? error.message : 'Failed to change work item type');
+        throw error;
+      }
+    },
+    [tickets, selectedOrganization]
+  );
+
   const handleZapClick = useCallback((item: WorkItem) => {
     if (item.assignee) {
       setZapTarget({ agent: item.assignee, ticketId: item.id });
     }
   }, []);
 
-  const handleWorkItemUpdate = useCallback(
-    async (workItemId: number, updates: { title?: string; description?: string }) => {
+  const handleDialogTagsChange = useCallback(
+    async (workItemId: number, tags: string[]) => {
       const ticket = tickets.find((t) => t.id === workItemId);
       if (!ticket || !selectedOrganization) return;
-      const response = await fetch(`/api/devops/tickets/${workItemId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-devops-org': selectedOrganization.accountName,
-        },
-        body: JSON.stringify({ ...updates, project: ticket.project }),
-      });
-      if (response.ok) {
-        // Update local state
-        setTickets((prev) =>
-          prev.map((t) =>
-            t.id === workItemId
-              ? {
-                  ...t,
-                  ...(updates.title && { title: updates.title }),
-                  ...(updates.description && { description: updates.description }),
-                }
-              : t
-          )
+      try {
+        const response = await fetch(`/api/devops/tickets/${workItemId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-devops-org': selectedOrganization.accountName,
+          },
+          body: JSON.stringify({ tags, project: ticket.project }),
+        });
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || 'Failed to update tags');
+        }
+        setTickets((prev) => prev.map((t) => (t.id === workItemId ? { ...t, tags } : t)));
+        setSelectedTicket((prev) => (prev && prev.id === workItemId ? { ...prev, tags } : prev));
+        toast.success('Tags updated');
+      } catch (error) {
+        console.error('Failed to update tags:', error);
+        toast.error(error instanceof Error ? error.message : 'Failed to update tags');
+        throw error;
+      }
+    },
+    [tickets, selectedOrganization]
+  );
+
+  const handleWorkItemUpdate = useCallback(
+    async (
+      workItemId: number,
+      updates: {
+        title?: string;
+        description?: string;
+        resolution?: string;
+        mitigation?: string;
+      }
+    ) => {
+      const ticket = tickets.find((t) => t.id === workItemId);
+      if (!ticket || !selectedOrganization) return;
+      try {
+        const response = await fetch(`/api/devops/tickets/${workItemId}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-devops-org': selectedOrganization.accountName,
+          },
+          body: JSON.stringify({
+            ...updates,
+            project: ticket.project,
+            workItemType: ticket.workItemType,
+          }),
+        });
+        if (!response.ok) throw new Error('Failed to update work item');
+        const applied: Partial<Ticket> = {};
+        if (updates.title !== undefined) applied.title = updates.title;
+        if (updates.description !== undefined) applied.description = updates.description;
+        if (updates.resolution !== undefined) applied.resolution = updates.resolution;
+        if (updates.mitigation !== undefined) applied.mitigation = updates.mitigation;
+        setTickets((prev) => prev.map((t) => (t.id === workItemId ? { ...t, ...applied } : t)));
+        setSelectedTicket((prev) => (prev ? { ...prev, ...applied } : null));
+        const fieldLabels: Record<keyof typeof updates, string> = {
+          title: 'Title',
+          description: 'Description',
+          resolution: 'Resolution',
+          mitigation: 'Mitigation',
+        };
+        const changedKey = (Object.keys(updates) as Array<keyof typeof updates>).find(
+          (k) => updates[k] !== undefined
         );
-        // Update selected ticket in dialog
-        setSelectedTicket((prev) =>
-          prev
-            ? {
-                ...prev,
-                ...(updates.title && { title: updates.title }),
-                ...(updates.description && { description: updates.description }),
-              }
-            : null
-        );
-      } else {
-        throw new Error('Failed to update work item');
+        const field = (changedKey && fieldLabels[changedKey]) || 'Work item';
+        toast.success(`${field} updated`);
+      } catch (error) {
+        console.error('Failed to update work item:', error);
+        toast.error('Failed to update work item');
+        throw error;
       }
     },
     [tickets, selectedOrganization]
@@ -232,6 +384,8 @@ function TicketsPageContent() {
             availableTypes={workItemTypes}
             defaultViewMode={defaultViewMode}
             hideTicketsOnlyToggle
+            organization={selectedOrganization?.accountName}
+            onRefresh={fetchTickets}
           />
         </div>
 
@@ -240,7 +394,15 @@ function TicketsPageContent() {
           workItem={selectedTicket ? ticketToWorkItem(selectedTicket) : null}
           isOpen={!!selectedTicket}
           onClose={() => setSelectedTicket(null)}
+          onDeleted={(workItemId) => {
+            setTickets((prev) => prev.filter((t) => t.id !== workItemId));
+            fetchTickets();
+          }}
           onStateChange={handleDialogStateChange}
+          onAssigneeChange={handleDialogAssigneeChange}
+          onPriorityChange={handleDialogPriorityChange}
+          onTypeChange={handleDialogTypeChange}
+          onTagsChange={handleDialogTagsChange}
           onUpdate={handleWorkItemUpdate}
         />
 

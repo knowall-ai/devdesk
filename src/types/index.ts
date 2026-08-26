@@ -147,6 +147,8 @@ export interface Ticket {
   description: string;
   reproSteps?: string;
   systemInfo?: string;
+  resolution?: string;
+  mitigation?: string;
   resolvedReason?: string;
   status: TicketStatus;
   devOpsState: string; // Original Azure DevOps state (e.g., 'New', 'Approved', 'To Do', etc.)
@@ -165,6 +167,13 @@ export interface Ticket {
   project: string;
   comments: TicketComment[];
   attachments?: Attachment[];
+  // Customer's response on a Question work item (Custom.CustomerResponse)
+  customerResponse?: string;
+  // Effort hours from Microsoft.VSTS.Scheduling.*. Undefined when the field has
+  // never been set on the work item, which DevOps reports by omitting it.
+  completedWork?: number;
+  remainingWork?: number;
+  originalEstimate?: number;
 }
 
 export interface TicketComment {
@@ -185,6 +194,10 @@ export interface Attachment {
   createdAt: Date;
   createdBy?: User;
 }
+
+// Work item types that appear on the Tickets screen and support bulk actions.
+// Higher-level types (Epic, Feature, User Story) are managed on the Projects screen.
+export const TICKET_WORK_ITEM_TYPES = ['Task', 'Enhancement', 'Issue', 'Bug', 'Risk', 'Question'];
 
 // Maximum file size for attachments (25MB)
 export const MAX_ATTACHMENT_SIZE = 25 * 1024 * 1024;
@@ -485,6 +498,11 @@ export interface WorkItem {
   devOpsUrl: string;
   tags: string[];
   priority?: TicketPriority;
+  resolution?: string;
+  mitigation?: string;
+  resolvedReason?: string;
+  // Customer's response on a Question work item (Custom.CustomerResponse)
+  customerResponse?: string;
   // Optional ticket-specific fields (populated when item is a ticket)
   requester?: Customer;
   organization?: Organization;
@@ -510,4 +528,65 @@ export interface TreemapConfig {
   colorScheme: TreemapColorScheme;
   showLabels: boolean;
   minBlockSize: number;
+}
+
+// Daily Standup Types
+
+/** A single work item in the standup view */
+export interface StandupWorkItem {
+  id: number;
+  title: string;
+  state: string;
+  stateCategory: string;
+  workItemType: string;
+  assignee?: User;
+  priority?: TicketPriority;
+  updatedAt: string;
+  createdAt: string;
+  project: string;
+  devOpsUrl: string;
+  tags: string[];
+  iterationPath?: string;
+  remainingWork?: number;
+}
+
+/** A column definition pulled from DevOps state configuration */
+export interface StandupColumn {
+  /** The DevOps state name (e.g. "New", "Active", "Resolved") */
+  name: string;
+  /** The DevOps state category (e.g. "Proposed", "InProgress", "Resolved", "Completed") */
+  category: string;
+  items: StandupWorkItem[];
+}
+
+/** Per-project standup data */
+export interface ProjectStandupData {
+  projectName: string;
+  columns: StandupColumn[];
+}
+
+/** Full standup response */
+export interface StandupData {
+  date: string;
+  projects: ProjectStandupData[];
+  /** Column definitions in display order (from DevOps state categories) */
+  columns: { name: string; category: string }[];
+  /**
+   * Project -> work item type -> the DevOps state names that type defines in
+   * that project. States come from the project's process template and are
+   * defined per work item type, so a display column valid for one card can be
+   * invalid for another; the board uses this to disable impossible drop
+   * targets. Keyed by project so a state that exists only in some other
+   * project's template can't unblock a column the card can't actually enter.
+   *
+   * A successful response always carries this, though it may be `{}` or be
+   * missing an entry for a given project or type when discovery came back
+   * empty for it. Treat any missing entry as "allow everything" and let the
+   * server decide — total discovery failure is a 500, not an omission here.
+   */
+  allowedStatesByProjectType?: Record<string, Record<string, string[]>>;
+  summary: {
+    columnCounts: Record<string, number>;
+    projectCount: number;
+  };
 }

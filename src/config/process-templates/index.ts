@@ -28,6 +28,10 @@ export interface ProcessTemplateConfig {
   fields: {
     priority?: string; // Field ref for priority (undefined if not supported)
     priorityValues?: Record<number, string>; // Map numeric values to display names
+    resolutionTypes?: string[]; // Work item types that support the Resolution field
+    resolutionFieldOverrides?: Record<string, string>; // Per-type field ref overrides for Resolution
+    mitigationTypes?: string[]; // Work item types that support the Mitigation field
+    mitigationFieldOverrides?: Record<string, string>; // Per-type field ref overrides for Mitigation
   };
 
   // State mappings - map actual DevOps states to our UI categories
@@ -115,6 +119,38 @@ export function getStateCategory(state: string, config: ProcessTemplateConfig): 
  */
 export function hasPriorityField(config: ProcessTemplateConfig): boolean {
   return !!config.fields.priority;
+}
+
+/**
+ * Check if a work item type supports the Resolution field in a given template
+ */
+export function hasResolutionField(workItemType: string, config: ProcessTemplateConfig): boolean {
+  return config.fields.resolutionTypes?.includes(workItemType) ?? false;
+}
+
+const DEFAULT_RESOLUTION_FIELD = 'Microsoft.VSTS.Common.Resolution';
+const DEFAULT_MITIGATION_FIELD = 'Microsoft.VSTS.CMMI.Mitigation';
+
+/**
+ * Get the Azure DevOps field reference name for the Resolution field
+ * Some work item types use a custom field (e.g., Task uses Custom.TaskResolution)
+ */
+export function getResolutionFieldRef(workItemType: string, config: ProcessTemplateConfig): string {
+  return config.fields.resolutionFieldOverrides?.[workItemType] ?? DEFAULT_RESOLUTION_FIELD;
+}
+
+/**
+ * Check if a work item type supports the Mitigation field in a given template
+ */
+export function hasMitigationField(workItemType: string, config: ProcessTemplateConfig): boolean {
+  return config.fields.mitigationTypes?.includes(workItemType) ?? false;
+}
+
+/**
+ * Get the Azure DevOps field reference name for the Mitigation field
+ */
+export function getMitigationFieldRef(workItemType: string, config: ProcessTemplateConfig): string {
+  return config.fields.mitigationFieldOverrides?.[workItemType] ?? DEFAULT_MITIGATION_FIELD;
 }
 
 /**
