@@ -1,20 +1,57 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useSession } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
-import { X, Send, Loader2, Search } from 'lucide-react';
+import { usePathname, useRouter } from 'next/navigation';
+import { X, Send, Loader2, Search, Paperclip } from 'lucide-react';
 import { useDevOpsApi } from '@/hooks/useDevOpsApi';
-import type { DevOpsProject, User, WorkItemType } from '@/types';
+import MentionInput from '@/components/common/MentionInput';
+import type { DevOpsProject, User, WorkItemType, ClassificationNode } from '@/types';
+import { ALLOWED_ATTACHMENT_TYPES } from '@/types';
+import { formatFileSize, validateFile } from '@/lib/attachment-utils';
+import { buildIdentityString, getDisplayNameFromIdentity } from '@/lib/identity';
+import { FileIcon } from '@/components/common';
+
+interface PriorityOption {
+  value: number | string;
+  label: string;
+}
+
+interface RequiredField {
+  referenceName: string;
+  name: string;
+  type: string;
+  allowedValues?: string[];
+}
+
+interface ParentCandidate {
+  id: number;
+  title: string;
+  workItemType: string;
+  state: string;
+  areaPath: string;
+  parentId?: number;
+}
+
+// Story-equivalents across templates (Agile / Scrum / CMMI). The picker
+// surfaces them all under the "Story" tier so users don't need to know
+// which template their project uses.
+const STORY_TYPES = ['User Story', 'Product Backlog Item', 'Requirement'];
+
+// Module-scope so the reference is stable across renders (keeps useMemo deps clean).
+const sortByTitle = (a: ParentCandidate, b: ParentCandidate) => a.title.localeCompare(b.title);
 
 interface NewTicketForm {
   project: string;
   title: string;
   description: string;
-  priority: number;
+  priority: number | string;
+  foundBy: string;
   assignee: string;
   tags: string;
   workItemType: string;
+  iterationPath: string;
+  areaPath: string;
 }
 
 interface NewTicketDialogProps {
@@ -26,6 +63,11 @@ interface NewTicketDialogProps {
 export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProps) {
   const { data: session } = useSession();
   const router = useRouter();
+  const pathname = usePathname();
+  // When opened from the Kanban Board, treat the new item as an internal
+  // work item, not a customer ticket: no auto "ticket" tag, no SLA, hidden
+  // from the Tickets screen (issue #372).
+  const isKanbanContext = pathname?.startsWith('/kanban') ?? false;
   const { get, post, hasOrganization } = useDevOpsApi();
   const [projects, setProjects] = useState<DevOpsProject[]>([]);
   const [teamMembers, setTeamMembers] = useState<User[]>([]);
@@ -33,18 +75,47 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [isLoadingMembers, setIsLoadingMembers] = useState(false);
   const [isLoadingTypes, setIsLoadingTypes] = useState(false);
+  const [priorityOptions, setPriorityOptions] = useState<PriorityOption[]>([]);
+  const [isLoadingPriorities, setIsLoadingPriorities] = useState(false);
+  const [hasPriority, setHasPriority] = useState(true);
+  const [priorityFieldRef, setPriorityFieldRef] = useState<string | null>(null);
+  const [requiredFields, setRequiredFields] = useState<RequiredField[]>([]);
+  const [additionalFieldValues, setAdditionalFieldValues] = useState<Record<string, string>>({});
+  const [isLoadingRequiredFields, setIsLoadingRequiredFields] = useState(false);
+  const [iterations, setIterations] = useState<ClassificationNode[]>([]);
+  const [areas, setAreas] = useState<ClassificationNode[]>([]);
+  const [isLoadingIterations, setIsLoadingIterations] = useState(false);
+  const [isLoadingAreas, setIsLoadingAreas] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [assigneeSearch, setAssigneeSearch] = useState('');
+
+  // Attachment state
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [isUploadingFiles, setIsUploadingFiles] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const [foundBySearch, setFoundBySearch] = useState('');
+
+  // Parent picker state — three cascading levels (Epic → Feature → Story).
+  // The actual parent linked is the most specific selection (story > feature > epic).
+  const [parentCandidates, setParentCandidates] = useState<ParentCandidate[]>([]);
+  const [isLoadingParents, setIsLoadingParents] = useState(false);
+  const [selectedEpicId, setSelectedEpicId] = useState<number | null>(null);
+  const [selectedFeatureId, setSelectedFeatureId] = useState<number | null>(null);
+  const [selectedStoryId, setSelectedStoryId] = useState<number | null>(null);
 
   const [form, setForm] = useState<NewTicketForm>({
     project: '',
     title: '',
     description: '',
-    priority: 3,
+    priority: '',
+    foundBy: '',
     assignee: '',
     tags: '',
     workItemType: 'Task',
+    iterationPath: '',
+    areaPath: '',
   });
 
   // Fetch functions defined first (before useEffects that use them)
@@ -114,6 +185,124 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
     [get]
   );
 
+  const fetchPriorities = useCallback(
+    async (projectName: string, workItemType: string) => {
+      setIsLoadingPriorities(true);
+      try {
+        const response = await get(
+          `/api/devops/projects/${encodeURIComponent(projectName)}/priorities?workItemType=${encodeURIComponent(workItemType)}`
+        );
+        if (!response.ok) throw new Error('Failed to fetch priorities');
+        const data = await response.json();
+        setHasPriority(data.hasPriority);
+        setPriorityOptions(data.priorities || []);
+        setPriorityFieldRef(data.fieldReferenceName || null);
+        // Reset priority to blank when options change
+        setForm((prev) => ({ ...prev, priority: '' }));
+      } catch (err) {
+        console.error('Failed to fetch priorities:', err);
+        setPriorityOptions([]);
+        setHasPriority(true);
+        setPriorityFieldRef(null);
+      } finally {
+        setIsLoadingPriorities(false);
+      }
+    },
+    [get]
+  );
+
+  const fetchRequiredFields = useCallback(
+    async (projectName: string, workItemType: string) => {
+      setIsLoadingRequiredFields(true);
+      try {
+        const response = await get(
+          `/api/devops/projects/${encodeURIComponent(projectName)}/required-fields?workItemType=${encodeURIComponent(workItemType)}`
+        );
+        if (!response.ok) throw new Error('Failed to fetch required fields');
+        const data = await response.json();
+        // Exclude fields already handled by dedicated UI controls
+        const handledFields = new Set([
+          'System.IterationPath',
+          'System.IterationId',
+          'System.AreaPath',
+          'System.AreaId',
+          'Custom.FoundBy',
+        ]);
+        const filtered = (data.fields || []).filter(
+          (f: RequiredField) => !handledFields.has(f.referenceName)
+        );
+        setRequiredFields(filtered);
+        setAdditionalFieldValues({});
+      } catch (err) {
+        console.error('Failed to fetch required fields:', err);
+        setRequiredFields([]);
+        setAdditionalFieldValues({});
+      } finally {
+        setIsLoadingRequiredFields(false);
+      }
+    },
+    [get]
+  );
+
+  const fetchIterations = useCallback(
+    async (projectName: string) => {
+      setIsLoadingIterations(true);
+      try {
+        const response = await get(
+          `/api/devops/projects/${encodeURIComponent(projectName)}/iterations`
+        );
+        if (!response.ok) throw new Error('Failed to fetch iterations');
+        const data = await response.json();
+        setIterations(data.iterations || []);
+      } catch (err) {
+        console.error('Failed to fetch iterations:', err);
+        setIterations([]);
+      } finally {
+        setIsLoadingIterations(false);
+      }
+    },
+    [get]
+  );
+
+  const fetchAreas = useCallback(
+    async (projectName: string) => {
+      setIsLoadingAreas(true);
+      try {
+        const response = await get(`/api/devops/projects/${encodeURIComponent(projectName)}/areas`);
+        if (!response.ok) throw new Error('Failed to fetch areas');
+        const data = await response.json();
+        setAreas(data.areas || []);
+      } catch (err) {
+        console.error('Failed to fetch areas:', err);
+        setAreas([]);
+      } finally {
+        setIsLoadingAreas(false);
+      }
+    },
+    [get]
+  );
+
+  const fetchParentCandidates = useCallback(
+    async (projectName: string) => {
+      setIsLoadingParents(true);
+      try {
+        const response = await get(
+          `/api/devops/projects/${encodeURIComponent(projectName)}/parent-candidates`
+        );
+        if (!response.ok) throw new Error('Failed to fetch parent candidates');
+        const data = await response.json();
+        setParentCandidates(data.candidates || []);
+      } catch (err) {
+        // Picker is optional — degrade silently to no candidates
+        console.error('Failed to fetch parent candidates:', err);
+        setParentCandidates([]);
+      } finally {
+        setIsLoadingParents(false);
+      }
+    },
+    [get]
+  );
+
   // Reset form when dialog opens
   useEffect(() => {
     if (isOpen) {
@@ -121,14 +310,30 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
         project: '',
         title: '',
         description: '',
-        priority: 3,
+        priority: '',
+        foundBy: '',
         assignee: '',
         tags: '',
         workItemType: 'Task',
+        iterationPath: '',
+        areaPath: '',
       });
       setError(null);
       setAssigneeSearch('');
+      setFoundBySearch('');
       setWorkItemTypes([]);
+      setPriorityOptions([]);
+      setHasPriority(true);
+      setPriorityFieldRef(null);
+      setIterations([]);
+      setAreas([]);
+      setPendingFiles([]);
+      setRequiredFields([]);
+      setAdditionalFieldValues({});
+      setParentCandidates([]);
+      setSelectedEpicId(null);
+      setSelectedFeatureId(null);
+      setSelectedStoryId(null);
     }
   }, [isOpen]);
 
@@ -139,16 +344,124 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
     }
   }, [isOpen, session, hasOrganization, fetchProjects]);
 
-  // Fetch team members and work item types when project changes
+  // Fetch team members, work item types, iterations, and areas when project changes
   useEffect(() => {
     if (form.project && session?.accessToken && hasOrganization) {
       fetchTeamMembers(form.project);
       fetchWorkItemTypes(form.project);
+      fetchIterations(form.project);
+      fetchAreas(form.project);
+      fetchParentCandidates(form.project);
     } else {
       setTeamMembers([]);
       setWorkItemTypes([]);
+      setIterations([]);
+      setAreas([]);
+      setParentCandidates([]);
     }
-  }, [form.project, session, hasOrganization, fetchTeamMembers, fetchWorkItemTypes]);
+    // Clear selected parent when project changes
+    setSelectedEpicId(null);
+    setSelectedFeatureId(null);
+    setSelectedStoryId(null);
+  }, [
+    form.project,
+    session,
+    hasOrganization,
+    fetchTeamMembers,
+    fetchWorkItemTypes,
+    fetchIterations,
+    fetchAreas,
+    fetchParentCandidates,
+  ]);
+
+  // Fetch priorities when project or work item type changes
+  useEffect(() => {
+    if (form.project && form.workItemType && session?.accessToken && hasOrganization) {
+      fetchPriorities(form.project, form.workItemType);
+    } else {
+      setPriorityOptions([]);
+      setHasPriority(true);
+    }
+  }, [form.project, form.workItemType, session, hasOrganization, fetchPriorities]);
+
+  // Fetch required fields when project or work item type changes
+  useEffect(() => {
+    if (form.project && form.workItemType && session?.accessToken && hasOrganization) {
+      fetchRequiredFields(form.project, form.workItemType);
+    } else {
+      setRequiredFields([]);
+      setAdditionalFieldValues({});
+    }
+  }, [form.project, form.workItemType, session, hasOrganization, fetchRequiredFields]);
+
+  // Show Found By field only for Enhancement work item type
+  const showFoundBy = form.workItemType === 'Enhancement';
+
+  // Reset foundBy when type changes away from Enhancement
+  useEffect(() => {
+    if (!showFoundBy) {
+      setForm((prev) => ({ ...prev, foundBy: '' }));
+      setFoundBySearch('');
+    }
+  }, [showFoundBy]);
+
+  // Filter team members for Found By picker
+  const filteredFoundByMembers = useMemo(() => {
+    return teamMembers
+      .filter((member) => {
+        const isStakeholder =
+          member.accessLevel?.toLowerCase().includes('stakeholder') ||
+          member.licenseType?.toLowerCase().includes('stakeholder');
+        return !isStakeholder;
+      })
+      .filter((member) => {
+        if (!foundBySearch) return true;
+        const search = foundBySearch.toLowerCase();
+        return (
+          member.displayName.toLowerCase().includes(search) ||
+          member.email?.toLowerCase().includes(search)
+        );
+      })
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }, [teamMembers, foundBySearch]);
+
+  // Group candidates by tier and apply cascading filter rules.
+  const epics = useMemo(
+    () => parentCandidates.filter((p) => p.workItemType === 'Epic').sort(sortByTitle),
+    [parentCandidates]
+  );
+
+  const features = useMemo(() => {
+    const all = parentCandidates.filter((p) => p.workItemType === 'Feature');
+    const filtered = selectedEpicId ? all.filter((f) => f.parentId === selectedEpicId) : all;
+    return filtered.sort(sortByTitle);
+  }, [parentCandidates, selectedEpicId]);
+
+  const stories = useMemo(() => {
+    const all = parentCandidates.filter((p) => STORY_TYPES.includes(p.workItemType));
+    let filtered = all;
+    if (selectedFeatureId) {
+      filtered = all.filter((s) => s.parentId === selectedFeatureId);
+    } else if (selectedEpicId) {
+      // No Feature picked yet — surface stories rolling up to the chosen Epic.
+      // This includes both stories under an intermediate Feature and stories linked
+      // directly to the Epic (e.g. teams that skip the Feature tier).
+      const featureIdsUnderEpic = new Set(
+        parentCandidates
+          .filter((p) => p.workItemType === 'Feature' && p.parentId === selectedEpicId)
+          .map((f) => f.id)
+      );
+      filtered = all.filter(
+        (s) =>
+          s.parentId === selectedEpicId ||
+          (s.parentId !== undefined && featureIdsUnderEpic.has(s.parentId))
+      );
+    }
+    return filtered.sort(sortByTitle);
+  }, [parentCandidates, selectedFeatureId, selectedEpicId]);
+
+  // Most-specific selection wins. This is the parent that gets linked on submit.
+  const effectiveParentId = selectedStoryId ?? selectedFeatureId ?? selectedEpicId ?? null;
 
   // Filter out Stakeholders and apply search
   const filteredMembers = useMemo(() => {
@@ -171,10 +484,53 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
       .sort((a, b) => a.displayName.localeCompare(b.displayName));
   }, [teamMembers, assigneeSearch]);
 
+  // File attachment handlers
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files) return;
+
+    setError(null);
+    const newFiles: File[] = [];
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      const validationError = validateFile(file);
+      if (validationError) {
+        setError(validationError);
+        continue;
+      }
+      newFiles.push(file);
+    }
+
+    if (newFiles.length > 0) {
+      setPendingFiles((prev) => [...prev, ...newFiles]);
+    }
+
+    // Reset file input
+    if (fileInputRef.current) {
+      fileInputRef.current.value = '';
+    }
+  };
+
+  const removePendingFile = (index: number) => {
+    setPendingFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.project || !form.title.trim()) {
-      setError('Please select a project and enter a title');
+    const extraFields = [showFoundBy && !form.foundBy ? 'Found By' : ''].filter(Boolean);
+    if (
+      !form.project ||
+      !form.title.trim() ||
+      !form.workItemType ||
+      !form.iterationPath ||
+      !form.areaPath ||
+      extraFields.length > 0
+    ) {
+      setError(
+        'Please fill in all required fields: Project, Title, Type, Iteration, Area' +
+          (extraFields.length > 0 ? `, ${extraFields.join(', ')}` : '')
+      );
       return;
     }
 
@@ -182,17 +538,38 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
     setError(null);
 
     try {
+      // Build additionalFields from dynamic required field values
+      const additionalFields: Record<string, string> = {};
+      for (const field of requiredFields) {
+        const value = additionalFieldValues[field.referenceName];
+        if (value) {
+          additionalFields[field.referenceName] = value;
+        }
+      }
+      // Add Found By as an additional field for Enhancement type
+      if (form.foundBy) {
+        additionalFields['Custom.FoundBy'] = form.foundBy;
+      }
+
       const response = await post('/api/devops/tickets', {
         project: form.project,
         title: form.title.trim(),
         description: form.description.trim(),
-        priority: form.priority,
+        priority: hasPriority ? form.priority : undefined,
+        priorityFieldRef: priorityFieldRef || undefined,
         assignee: form.assignee || undefined,
         workItemType: form.workItemType,
+        iterationPath: form.iterationPath || undefined,
+        areaPath: form.areaPath || undefined,
         tags: form.tags
           .split(',')
           .map((t) => t.trim())
           .filter(Boolean),
+        additionalFields: Object.keys(additionalFields).length > 0 ? additionalFields : undefined,
+        parentId: effectiveParentId ?? undefined,
+        // Kanban Board context: create as a plain internal work item (no
+        // "ticket" tag → invisible to the Tickets screen and SLA tracking)
+        asTicket: !isKanbanContext,
       });
 
       if (!response.ok) {
@@ -201,47 +578,65 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
       }
 
       const data = await response.json();
+      const ticketId = data.ticket.id;
+
+      // Upload attachments if any
+      if (pendingFiles.length > 0) {
+        setIsUploadingFiles(true);
+        const failedUploads: string[] = [];
+        for (const file of pendingFiles) {
+          const formData = new FormData();
+          formData.append('file', file);
+
+          const uploadResponse = await fetch(`/api/devops/tickets/${ticketId}/attachments`, {
+            method: 'POST',
+            body: formData,
+          });
+
+          if (!uploadResponse.ok) {
+            failedUploads.push(file.name);
+          }
+        }
+        setIsUploadingFiles(false);
+
+        if (failedUploads.length > 0) {
+          setError(
+            `Ticket created, but ${failedUploads.length} attachment(s) failed to upload: ${failedUploads.join(', ')}`
+          );
+          return;
+        }
+      }
+
       onClose();
-      router.push(`/tickets/${data.ticket.id}`);
+      // Kanban Board: stay on the board so the user sees the new item there.
+      // Other contexts: jump to the new ticket's detail page.
+      if (!isKanbanContext) {
+        router.push(`/tickets/${ticketId}`);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create ticket');
+      const fallback = isKanbanContext ? 'Failed to create work item' : 'Failed to create ticket';
+      setError(err instanceof Error ? err.message : fallback);
     } finally {
       setIsSubmitting(false);
+      setIsUploadingFiles(false);
     }
-  };
-
-  // Build full identity string for Azure DevOps: "DisplayName <email>"
-  const buildIdentityString = (member: User): string => {
-    if (member.email) {
-      return `${member.displayName} <${member.email}>`;
-    }
-    return member.displayName;
-  };
-
-  // Extract display name from identity string "DisplayName <email>"
-  const getDisplayNameFromIdentity = (identity: string): string => {
-    if (!identity) {
-      return '';
-    }
-
-    const trimmedIdentity = identity.trim();
-    const ltIndex = trimmedIdentity.indexOf('<');
-
-    if (ltIndex !== -1) {
-      return trimmedIdentity.slice(0, ltIndex).trim();
-    }
-
-    return trimmedIdentity;
   };
 
   const handleTakeIt = () => {
-    if (session?.user?.email) {
-      const currentUser = filteredMembers.find(
-        (m) => m.email?.toLowerCase() === session.user?.email?.toLowerCase()
-      );
-      if (currentUser) {
-        setForm((prev) => ({ ...prev, assignee: buildIdentityString(currentUser) }));
-      }
+    const userEmail = session?.user?.email?.toLowerCase();
+    const userName = session?.user?.name?.toLowerCase();
+
+    // Try matching by email first, then fall back to display name
+    let currentUser: User | undefined;
+    if (userEmail) {
+      currentUser = teamMembers.find((m) => m.email?.toLowerCase() === userEmail);
+    }
+    if (!currentUser && userName) {
+      currentUser = teamMembers.find((m) => m.displayName?.toLowerCase() === userName);
+    }
+
+    if (currentUser) {
+      setForm((prev) => ({ ...prev, assignee: buildIdentityString(currentUser) }));
     }
   };
 
@@ -259,8 +654,12 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
 
       {/* Dialog */}
       <div
-        className="relative z-10 flex max-h-[90vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg"
-        style={{ backgroundColor: 'var(--background)', border: '1px solid var(--border)' }}
+        className="relative z-10 flex w-full max-w-4xl flex-col overflow-hidden rounded-lg"
+        style={{
+          height: '85vh',
+          backgroundColor: 'var(--background)',
+          border: '1px solid var(--border)',
+        }}
       >
         {/* Header */}
         <div
@@ -275,7 +674,7 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
               New
             </span>
             <h2 className="text-lg font-semibold" style={{ color: 'var(--text-primary)' }}>
-              Create Ticket
+              {isKanbanContext ? 'Create Work Item' : 'Create Ticket'}
             </h2>
           </div>
           <button
@@ -316,13 +715,99 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
 
               {/* Description */}
               <div>
-                <textarea
-                  placeholder="Description..."
+                <MentionInput
+                  placeholder="Description... Paste images with Ctrl+V"
                   value={form.description}
-                  onChange={(e) => setForm((prev) => ({ ...prev, description: e.target.value }))}
+                  onChange={(val) => setForm((prev) => ({ ...prev, description: val }))}
+                  onPaste={(e) => {
+                    // Convert pasted images to inline base64 data URLs
+                    const files = e.clipboardData?.files;
+                    const items = e.clipboardData?.items;
+                    const imageFiles: File[] = [];
+
+                    if (files) {
+                      for (let i = 0; i < files.length; i++) {
+                        if (files[i].type.startsWith('image/')) imageFiles.push(files[i]);
+                      }
+                    }
+                    if (imageFiles.length === 0 && items) {
+                      for (let i = 0; i < items.length; i++) {
+                        if (items[i].kind === 'file' && items[i].type.startsWith('image/')) {
+                          const f = items[i].getAsFile();
+                          if (f) imageFiles.push(f);
+                        }
+                      }
+                    }
+
+                    if (imageFiles.length === 0) return;
+                    e.preventDefault();
+
+                    for (const file of imageFiles) {
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        const dataUrl = reader.result as string;
+                        const imgHtml = `<img src="${dataUrl}" alt="${file.name}" />`;
+                        setForm((prev) => ({
+                          ...prev,
+                          description: prev.description
+                            ? `${prev.description}\n${imgHtml}`
+                            : imgHtml,
+                        }));
+                      };
+                      reader.readAsDataURL(file);
+                    }
+                  }}
                   className="input min-h-[200px] w-full resize-none"
                 />
               </div>
+
+              {/* Hidden file input */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                onChange={handleFileSelect}
+                accept={ALLOWED_ATTACHMENT_TYPES.join(',')}
+                className="hidden"
+              />
+
+              {/* Pending files */}
+              {pendingFiles.length > 0 && (
+                <div className="mt-3">
+                  <label
+                    className="mb-2 block text-xs uppercase"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    Attachments ({pendingFiles.length})
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {pendingFiles.map((file, index) => (
+                      <div
+                        key={`${file.name}-${index}`}
+                        className="flex items-center gap-2 rounded-md px-2 py-1 text-sm"
+                        style={{
+                          backgroundColor: 'var(--surface)',
+                          color: 'var(--text-secondary)',
+                        }}
+                      >
+                        <FileIcon contentType={file.type} size={14} />
+                        <span className="max-w-[150px] truncate">{file.name}</span>
+                        <span className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                          ({formatFileSize(file.size)})
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removePendingFile(index)}
+                          className="ml-1 hover:opacity-70"
+                          style={{ color: 'var(--text-muted)', cursor: 'pointer' }}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Submit bar */}
@@ -330,9 +815,24 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
               className="flex items-center justify-between border-t p-4"
               style={{ borderColor: 'var(--border)', backgroundColor: 'var(--surface)' }}
             >
-              <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
-                Public reply
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center gap-1 rounded p-2 text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                  style={{
+                    color: pendingFiles.length > 0 ? 'var(--primary)' : 'var(--text-muted)',
+                    cursor: 'pointer',
+                  }}
+                  title="Attach files"
+                >
+                  <Paperclip size={18} />
+                  {pendingFiles.length > 0 && <span>{pendingFiles.length}</span>}
+                </button>
+                <span className="text-sm" style={{ color: 'var(--text-muted)' }}>
+                  Public reply
+                </span>
+              </div>
               <div className="flex gap-2">
                 <button
                   type="button"
@@ -344,16 +844,37 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting || !form.project || !form.title.trim()}
+                  disabled={
+                    isSubmitting ||
+                    !form.project ||
+                    !form.title.trim() ||
+                    !form.workItemType ||
+                    !form.iterationPath ||
+                    !form.areaPath ||
+                    requiredFields.some(
+                      (f) => !additionalFieldValues[f.referenceName]?.toString().trim()
+                    ) ||
+                    (showFoundBy && !form.foundBy)
+                  }
                   className="btn-primary flex items-center gap-2"
                   style={{ cursor: 'pointer' }}
                 >
-                  {isSubmitting ? (
-                    <Loader2 className="animate-spin" size={16} />
+                  {isUploadingFiles ? (
+                    <>
+                      <Loader2 className="animate-spin" size={16} />
+                      Uploading...
+                    </>
+                  ) : isSubmitting ? (
+                    <>
+                      <Loader2 className="animate-spin" size={16} />
+                      Creating...
+                    </>
                   ) : (
-                    <Send size={16} />
+                    <>
+                      <Send size={16} />
+                      Submit as New
+                    </>
                   )}
-                  Submit as New
                 </button>
               </div>
             </div>
@@ -385,7 +906,13 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
                   <select
                     value={form.project}
                     onChange={(e) =>
-                      setForm((prev) => ({ ...prev, project: e.target.value, assignee: '' }))
+                      setForm((prev) => ({
+                        ...prev,
+                        project: e.target.value,
+                        assignee: '',
+                        iterationPath: '',
+                        areaPath: '',
+                      }))
                     }
                     className="input w-full"
                     required
@@ -406,7 +933,7 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
                   className="mb-1 block text-xs uppercase"
                   style={{ color: 'var(--text-muted)' }}
                 >
-                  Type
+                  Type *
                 </label>
                 {isLoadingTypes ? (
                   <div
@@ -543,31 +1070,396 @@ export default function NewTicketDialog({ isOpen, onClose }: NewTicketDialogProp
                   className="input w-full"
                 />
                 <p className="mt-1 text-xs" style={{ color: 'var(--text-muted)' }}>
-                  Comma-separated. &quot;ticket&quot; tag added automatically.
+                  {isKanbanContext
+                    ? 'Comma-separated. Internal work item — no "ticket" tag, hidden from the Tickets screen.'
+                    : 'Comma-separated. "ticket" tag added automatically.'}
                 </p>
               </div>
 
               {/* Priority */}
+              {hasPriority && (
+                <div>
+                  <label
+                    className="mb-1 block text-xs uppercase"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    Priority
+                  </label>
+                  {isLoadingPriorities ? (
+                    <div
+                      className="flex items-center gap-2 text-sm"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      <Loader2 className="animate-spin" size={14} />
+                      Loading...
+                    </div>
+                  ) : priorityOptions.length > 0 ? (
+                    <select
+                      value={String(form.priority)}
+                      onChange={(e) =>
+                        setForm((prev) => {
+                          const selected = priorityOptions.find(
+                            (opt) => String(opt.value) === e.target.value
+                          );
+                          return { ...prev, priority: selected ? selected.value : e.target.value };
+                        })
+                      }
+                      className="input w-full"
+                    >
+                      <option value="">Select priority...</option>
+                      {priorityOptions.map((opt) => (
+                        <option key={String(opt.value)} value={String(opt.value)}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <select
+                      value={String(form.priority)}
+                      onChange={(e) => setForm((prev) => ({ ...prev, priority: e.target.value }))}
+                      className="input w-full"
+                      disabled={!form.project}
+                    >
+                      <option value="">Select priority...</option>
+                    </select>
+                  )}
+                </div>
+              )}
+
+              {/* Area */}
               <div>
                 <label
                   className="mb-1 block text-xs uppercase"
                   style={{ color: 'var(--text-muted)' }}
                 >
-                  Priority
+                  Area *
                 </label>
-                <select
-                  value={form.priority}
-                  onChange={(e) =>
-                    setForm((prev) => ({ ...prev, priority: parseInt(e.target.value) }))
-                  }
-                  className="input w-full"
-                >
-                  <option value={1}>Urgent</option>
-                  <option value={2}>High</option>
-                  <option value={3}>Normal</option>
-                  <option value={4}>Low</option>
-                </select>
+                {isLoadingAreas ? (
+                  <div
+                    className="flex items-center gap-2 text-sm"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    <Loader2 className="animate-spin" size={14} />
+                    Loading...
+                  </div>
+                ) : (
+                  <select
+                    value={form.areaPath}
+                    onChange={(e) => setForm((prev) => ({ ...prev, areaPath: e.target.value }))}
+                    className="input w-full"
+                    disabled={!form.project || areas.length === 0}
+                    required
+                  >
+                    <option value="">Select area...</option>
+                    {areas.map((node) => (
+                      <option key={node.id} value={node.path}>
+                        {node.path}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
+
+              {/* Iteration */}
+              <div>
+                <label
+                  className="mb-1 block text-xs uppercase"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  Iteration *
+                </label>
+                {isLoadingIterations ? (
+                  <div
+                    className="flex items-center gap-2 text-sm"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    <Loader2 className="animate-spin" size={14} />
+                    Loading...
+                  </div>
+                ) : (
+                  <select
+                    value={form.iterationPath}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, iterationPath: e.target.value }))
+                    }
+                    className="input w-full"
+                    disabled={!form.project || iterations.length === 0}
+                    required
+                  >
+                    <option value="">Select iteration...</option>
+                    {iterations.map((node) => (
+                      <option key={node.id} value={node.path}>
+                        {node.path}
+                      </option>
+                    ))}
+                  </select>
+                )}
+              </div>
+
+              {/* Parent (optional) — cascading Epic → Feature → Story.
+                  The most specific selection becomes the linked parent. */}
+              {isLoadingParents ? (
+                <div>
+                  <label
+                    className="mb-1 block text-xs uppercase"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    Parent
+                  </label>
+                  <div
+                    className="flex items-center gap-2 text-sm"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    <Loader2 className="animate-spin" size={14} />
+                    Loading...
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <div>
+                    <label
+                      className="mb-1 block text-xs uppercase"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      Epic
+                    </label>
+                    <select
+                      value={selectedEpicId ?? ''}
+                      onChange={(e) => {
+                        const id = e.target.value ? parseInt(e.target.value, 10) : null;
+                        setSelectedEpicId(id);
+                        // Cascading reset — narrower selections may no longer fit
+                        setSelectedFeatureId(null);
+                        setSelectedStoryId(null);
+                      }}
+                      className="input w-full"
+                      disabled={!form.project || epics.length === 0}
+                    >
+                      <option value="">{epics.length === 0 ? 'No Epics available' : 'None'}</option>
+                      {epics.map((epic) => (
+                        <option key={epic.id} value={epic.id}>
+                          #{epic.id} {epic.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label
+                      className="mb-1 block text-xs uppercase"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      Feature
+                    </label>
+                    <select
+                      value={selectedFeatureId ?? ''}
+                      onChange={(e) => {
+                        const id = e.target.value ? parseInt(e.target.value, 10) : null;
+                        setSelectedFeatureId(id);
+                        setSelectedStoryId(null);
+                      }}
+                      className="input w-full"
+                      disabled={!form.project || features.length === 0}
+                    >
+                      <option value="">
+                        {features.length === 0
+                          ? selectedEpicId
+                            ? 'No Features under this Epic'
+                            : 'No Features available'
+                          : 'None'}
+                      </option>
+                      {features.map((feature) => (
+                        <option key={feature.id} value={feature.id}>
+                          #{feature.id} {feature.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label
+                      className="mb-1 block text-xs uppercase"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      Story
+                    </label>
+                    <select
+                      value={selectedStoryId ?? ''}
+                      onChange={(e) => {
+                        const id = e.target.value ? parseInt(e.target.value, 10) : null;
+                        setSelectedStoryId(id);
+                      }}
+                      className="input w-full"
+                      disabled={!form.project || stories.length === 0}
+                    >
+                      <option value="">
+                        {stories.length === 0
+                          ? selectedFeatureId
+                            ? 'No Stories under this Feature'
+                            : selectedEpicId
+                              ? 'No Stories under this Epic'
+                              : 'No Stories available'
+                          : 'None'}
+                      </option>
+                      {stories.map((story) => (
+                        <option key={story.id} value={story.id}>
+                          #{story.id} {story.title}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </>
+              )}
+
+              {/* Found By - people picker, shown only for Enhancement type */}
+              {showFoundBy && (
+                <div>
+                  <label
+                    className="mb-1 block text-xs uppercase"
+                    style={{ color: 'var(--text-muted)' }}
+                  >
+                    Found By *
+                  </label>
+                  {isLoadingMembers ? (
+                    <div
+                      className="flex items-center gap-2 text-sm"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      <Loader2 className="animate-spin" size={14} />
+                      Loading...
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {/* Search input */}
+                      <div className="relative">
+                        <Search
+                          size={14}
+                          className="absolute top-1/2 left-2 -translate-y-1/2"
+                          style={{ color: 'var(--text-muted)' }}
+                        />
+                        <input
+                          type="text"
+                          placeholder="Search users..."
+                          value={foundBySearch}
+                          onChange={(e) => setFoundBySearch(e.target.value)}
+                          className="input w-full pl-7 text-sm"
+                          disabled={!form.project}
+                        />
+                      </div>
+                      {/* Selected user or dropdown */}
+                      {form.foundBy && form.foundBy.trim() ? (
+                        <div
+                          className="flex items-center justify-between rounded p-2"
+                          style={{ backgroundColor: 'var(--surface-hover)' }}
+                        >
+                          <span className="text-sm" style={{ color: 'var(--text-primary)' }}>
+                            {getDisplayNameFromIdentity(form.foundBy)}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setForm((prev) => ({ ...prev, foundBy: '' }));
+                              setFoundBySearch('');
+                            }}
+                            className="text-xs hover:underline"
+                            style={{ color: 'var(--text-muted)', cursor: 'pointer' }}
+                          >
+                            clear
+                          </button>
+                        </div>
+                      ) : (
+                        <div
+                          className="max-h-32 overflow-auto rounded"
+                          style={{ border: '1px solid var(--border)' }}
+                        >
+                          {filteredFoundByMembers.length === 0 ? (
+                            <p
+                              className="p-2 text-center text-xs"
+                              style={{ color: 'var(--text-muted)' }}
+                            >
+                              {form.project ? 'No users found' : 'Select a project first'}
+                            </p>
+                          ) : (
+                            filteredFoundByMembers.map((member) => (
+                              <button
+                                key={member.id}
+                                type="button"
+                                onClick={() => {
+                                  setForm((prev) => ({
+                                    ...prev,
+                                    foundBy: buildIdentityString(member),
+                                  }));
+                                  setFoundBySearch('');
+                                }}
+                                className="block w-full px-2 py-1.5 text-left text-sm transition-colors hover:bg-[var(--surface-hover)]"
+                                style={{ color: 'var(--text-primary)', cursor: 'pointer' }}
+                              >
+                                {member.displayName}
+                              </button>
+                            ))
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Dynamic required fields */}
+              {isLoadingRequiredFields ? (
+                <div
+                  className="flex items-center gap-2 text-sm"
+                  style={{ color: 'var(--text-muted)' }}
+                >
+                  <Loader2 className="animate-spin" size={14} />
+                  Loading fields...
+                </div>
+              ) : (
+                requiredFields.map((field) => (
+                  <div key={field.referenceName}>
+                    <label
+                      className="mb-1 block text-xs uppercase"
+                      style={{ color: 'var(--text-muted)' }}
+                    >
+                      {field.name} *
+                    </label>
+                    {field.allowedValues ? (
+                      <select
+                        required
+                        value={additionalFieldValues[field.referenceName] || ''}
+                        onChange={(e) =>
+                          setAdditionalFieldValues((prev) => ({
+                            ...prev,
+                            [field.referenceName]: e.target.value,
+                          }))
+                        }
+                        className="input w-full"
+                      >
+                        <option value="">Select {field.name.toLowerCase()}...</option>
+                        {field.allowedValues.map((val) => (
+                          <option key={val} value={val}>
+                            {val}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        required
+                        type="text"
+                        placeholder={field.name}
+                        value={additionalFieldValues[field.referenceName] || ''}
+                        onChange={(e) =>
+                          setAdditionalFieldValues((prev) => ({
+                            ...prev,
+                            [field.referenceName]: e.target.value,
+                          }))
+                        }
+                        className="input w-full"
+                      />
+                    )}
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </form>

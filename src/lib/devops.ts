@@ -1,4 +1,9 @@
 // Azure DevOps API Service Layer
+
+/** Escape single quotes in WIQL string literals to prevent injection */
+function escapeWiql(value: string): string {
+  return value.replace(/'/g, "''");
+}
 import type {
   DevOpsWorkItem,
   DevOpsProject,
@@ -9,15 +14,56 @@ import type {
   User,
   Organization,
   TicketComment,
+  SLALevel,
+  Attachment,
   Epic,
   Feature,
   WorkItem,
+  WorkItemUpdate,
   EpicType,
   TreemapNode,
+  ClassificationNode,
 } from '@/types';
+import { parseSLAFromDescription, calculateTicketSLA, DEFAULT_SLA_LEVEL } from './sla';
+import {
+  getMitigationFieldRef,
+  getResolutionFieldRef,
+  getTemplateConfig,
+} from '@/config/process-templates';
 
 const DEVOPS_ORG = process.env.AZURE_DEVOPS_ORG || 'KnowAll';
 const DEVOPS_BASE_URL = `https://dev.azure.com/${DEVOPS_ORG}`;
+
+/**
+ * Read the resolution value from a work item, checking all possible field names
+ * (e.g., Microsoft.VSTS.Common.Resolution for Bug, Custom.TaskResolution for Task)
+ */
+function readResolutionField(fields: Record<string, unknown>): string | undefined {
+  // Check standard field first, then known custom fields
+  const candidates = ['Microsoft.VSTS.Common.Resolution', 'Custom.TaskResolution'];
+  for (const ref of candidates) {
+    const value = fields[ref] as string;
+    if (value) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Read the mitigation value from a work item (used by Issue/Risk types)
+ * Checks the standard CMMI field, any template overrides, and known custom fields.
+ */
+function readMitigationField(fields: Record<string, unknown>): string | undefined {
+  const templateConfig = getTemplateConfig();
+  const overrides = Object.values(templateConfig.fields.mitigationFieldOverrides || {});
+  const candidates = ['Microsoft.VSTS.CMMI.Mitigation', ...overrides, 'Custom.Mitigation'];
+  // Deduplicate
+  const unique = [...new Set(candidates)];
+  for (const ref of unique) {
+    const value = fields[ref] as string;
+    if (value) return value;
+  }
+  return undefined;
+}
 
 // Map Azure DevOps state category to Zendesk-like status
 // Categories are consistent across all process templates (Basic, Agile, Scrum, CMMI)
@@ -34,6 +80,16 @@ function mapCategoryToStatus(category: string): TicketStatus {
 
 // Cache for state-to-category mapping (populated by fetchStateCategories)
 let stateCategoryCache: Record<string, string> = {};
+
+// Cache for project list per organization (avoids redundant fetches)
+const projectListCache: Map<string, { data: DevOpsProject[]; timestamp: number }> = new Map();
+const PROJECT_CACHE_TTL_MS = 30 * 1000; // 30 seconds
+
+// Cache for current iterations per organization
+const currentIterationsCache: Map<string, { data: Map<string, string>; timestamp: number }> =
+  new Map();
+const currentIterationsInFlight: Map<string, Promise<Map<string, string>>> = new Map();
+const CURRENT_ITERATIONS_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 // Set the state category cache (called from API routes after fetching states)
 export function setStateCategoryCache(stateCategories: Record<string, string>) {
@@ -66,6 +122,34 @@ export function mapStatusToState(status: TicketStatus): string {
   return statusMap[status] || 'Active';
 }
 
+// All effort estimate fields on Features (all stored in days in Azure DevOps)
+const FEATURE_EFFORT_FIELDS = [
+  'Microsoft.VSTS.Scheduling.Effort',
+  'Custom.StrategicEffortDays',
+  'Custom.PrepEffortDays',
+  'Custom.DesignEffortDays',
+  'Custom.Engineereffort',
+  'Custom.TestEffortDays',
+  'Custom.PlanningEffortDays',
+  'Custom.OperateEffortDays',
+  'Custom.Architecteffort',
+  'Custom.Managereffort',
+];
+
+// Sum all effort fields and convert from days to hours (8h/day)
+function sumEffortFields(fields: Record<string, unknown>): number | undefined {
+  let total = 0;
+  let hasValue = false;
+  for (const field of FEATURE_EFFORT_FIELDS) {
+    const raw = fields[field];
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      total += raw;
+      hasValue = true;
+    }
+  }
+  return hasValue ? total * 8 : undefined;
+}
+
 // Map priority numbers to Zendesk-like priorities
 function mapPriority(priority?: number): TicketPriority | undefined {
   if (!priority) return undefined;
@@ -76,6 +160,7 @@ function mapPriority(priority?: number): TicketPriority | undefined {
 }
 
 // Convert DevOps identity to User
+// Uses avatar API as fallback when imageUrl is not provided
 function identityToUser(identity?: {
   displayName: string;
   uniqueName: string;
@@ -87,11 +172,13 @@ function identityToUser(identity?: {
     id: identity.id,
     displayName: identity.displayName,
     email: identity.uniqueName,
-    avatarUrl: identity.imageUrl,
+    // Use imageUrl if available, otherwise fall back to avatar API
+    avatarUrl: identity.imageUrl || `/api/devops/avatar/${identity.id}`,
   };
 }
 
 // Convert DevOps identity to Customer
+// Uses avatar API as fallback when imageUrl is not provided
 function identityToCustomer(identity: {
   displayName: string;
   uniqueName: string;
@@ -104,8 +191,40 @@ function identityToCustomer(identity: {
     email: identity.uniqueName,
     timezone: 'Europe/Dublin',
     tags: [],
-    avatarUrl: identity.imageUrl,
+    // Use imageUrl if available, otherwise fall back to avatar API
+    avatarUrl: identity.imageUrl || `/api/devops/avatar/${identity.id}`,
     lastUpdated: new Date(),
+  };
+}
+
+// Convert Ticket to WorkItem (for WorkItemBoard compatibility)
+export function ticketToWorkItem(ticket: Ticket): WorkItem {
+  return {
+    id: ticket.id,
+    title: ticket.title,
+    description: ticket.description,
+    state: ticket.devOpsState,
+    workItemType: ticket.workItemType,
+    areaPath: '',
+    project: ticket.project,
+    createdAt: ticket.createdAt,
+    updatedAt: ticket.updatedAt,
+    // Carry the real hours through. These used to be hardcoded to 0, which
+    // meant the dialog on /kanban and /tickets could never show effort at all
+    // — the fields were fetched, mapped away, and then reinvented as zeros.
+    completedWork: ticket.completedWork ?? 0,
+    remainingWork: ticket.remainingWork ?? 0,
+    originalEstimate: ticket.originalEstimate ?? 0,
+    assignee: ticket.assignee,
+    devOpsUrl: ticket.devOpsUrl,
+    tags: ticket.tags,
+    priority: ticket.priority,
+    resolution: ticket.resolution,
+    mitigation: ticket.mitigation,
+    resolvedReason: ticket.resolvedReason,
+    customerResponse: ticket.customerResponse,
+    requester: ticket.requester,
+    organization: ticket.organization,
   };
 }
 
@@ -117,8 +236,15 @@ export function workItemToTicket(workItem: DevOpsWorkItem, organization?: Organi
     workItemId: workItem.id,
     title: fields['System.Title'],
     description: fields['System.Description'] || '',
+    reproSteps: (fields['Microsoft.VSTS.TCM.ReproSteps'] as string) || undefined,
+    systemInfo: (fields['Microsoft.VSTS.TCM.SystemInfo'] as string) || undefined,
+    resolution: readResolutionField(fields),
+    mitigation: readMitigationField(fields),
+    resolvedReason: (fields['Microsoft.VSTS.Common.ResolvedReason'] as string) || undefined,
+    customerResponse: (fields['Custom.CustomerResponse'] as string) || undefined,
     status: mapStateToStatus(fields['System.State']),
     devOpsState: fields['System.State'], // Preserve original DevOps state
+    workItemType: fields['System.WorkItemType'], // Azure DevOps work item type
     priority: mapPriority(fields['Microsoft.VSTS.Common.Priority']),
     requester: identityToCustomer(fields['System.CreatedBy']),
     assignee: identityToUser(fields['System.AssignedTo']),
@@ -134,8 +260,41 @@ export function workItemToTicket(workItem: DevOpsWorkItem, organization?: Organi
       workItem._links?.html?.href ||
       `${DEVOPS_BASE_URL}/${fields['System.TeamProject']}/_workitems/edit/${workItem.id}`,
     project: fields['System.TeamProject'],
+    // Effort hours. Left undefined when the field isn't set on the work item so
+    // callers can tell "not tracked" from "tracked as zero"; the UI renders
+    // either as 0h.
+    completedWork: readEffortField(fields, 'Microsoft.VSTS.Scheduling.CompletedWork'),
+    remainingWork: readEffortField(fields, 'Microsoft.VSTS.Scheduling.RemainingWork'),
+    originalEstimate: readEffortField(fields, 'Microsoft.VSTS.Scheduling.OriginalEstimate'),
     comments: [],
   };
+}
+
+/**
+ * Read a scheduling/effort field as a number.
+ *
+ * DevOps omits these fields entirely when they've never been set, and can
+ * return them as strings on some templates, so coerce and reject anything
+ * non-finite rather than letting NaN reach the UI.
+ */
+function readEffortField(fields: Record<string, unknown>, fieldRef: string): number | undefined {
+  const raw = fields[fieldRef];
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : undefined;
+}
+
+// Thrown by AzureDevOpsService methods when the upstream DevOps API returns
+// a non-OK response. Callers can check `.status` to map to user-facing errors
+// (401/403 → permissions, 404 → not found, etc.) without parsing the message.
+export class DevOpsApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string
+  ) {
+    super(message);
+    this.name = 'DevOpsApiError';
+  }
 }
 
 export class AzureDevOpsService {
@@ -158,8 +317,13 @@ export class AzureDevOpsService {
     };
   }
 
-  // Get all projects the user has access to
+  // Get all projects the user has access to (cached for 30s per org)
   async getProjects(): Promise<DevOpsProject[]> {
+    const cached = projectListCache.get(this.organization);
+    if (cached && Date.now() - cached.timestamp < PROJECT_CACHE_TTL_MS) {
+      return cached.data;
+    }
+
     const response = await fetch(`${this.baseUrl}/_apis/projects?api-version=7.0`, {
       headers: this.headers,
     });
@@ -169,7 +333,93 @@ export class AzureDevOpsService {
     }
 
     const data = await response.json();
-    return data.value;
+    const projects: DevOpsProject[] = data.value;
+    projectListCache.set(this.organization, { data: projects, timestamp: Date.now() });
+    return projects;
+  }
+
+  // Get the process template name for a project
+  async getProjectProcessTemplate(projectName: string): Promise<string | null> {
+    try {
+      // First get available processes to build a map of process IDs to names
+      const processesResponse = await fetch(
+        `${this.baseUrl}/_apis/work/processes?api-version=7.1-preview.2`,
+        { headers: this.headers }
+      );
+
+      const processMap = new Map<string, string>();
+      if (processesResponse.ok) {
+        const processesData = await processesResponse.json();
+        for (const process of processesData.value || []) {
+          if (process.typeId && process.name) {
+            processMap.set(process.typeId, process.name);
+          }
+        }
+      }
+
+      // Get project properties which includes process template info
+      const propsResponse = await fetch(
+        `${this.baseUrl}/_apis/projects/${encodeURIComponent(projectName)}/properties?api-version=7.1-preview.1`,
+        { headers: this.headers }
+      );
+
+      if (!propsResponse.ok) {
+        return null;
+      }
+
+      const propsData = await propsResponse.json();
+      const properties = propsData.value || [];
+
+      // Get the ProcessTemplateType
+      const processTemplateTypeProp = properties.find(
+        (p: { name: string; value: string }) => p.name === 'System.ProcessTemplateType'
+      );
+
+      if (processTemplateTypeProp?.value) {
+        const templateName = processMap.get(processTemplateTypeProp.value);
+        if (templateName) return templateName;
+      }
+
+      // Fallback to CurrentProcessTemplateId
+      const currentProcessIdProp = properties.find(
+        (p: { name: string; value: string }) => p.name === 'System.CurrentProcessTemplateId'
+      );
+      if (currentProcessIdProp?.value) {
+        const templateName = processMap.get(currentProcessIdProp.value);
+        if (templateName) return templateName;
+      }
+
+      // Final fallback to System.Process Template name
+      const templateNameProp = properties.find(
+        (p: { name: string; value: string }) => p.name === 'System.Process Template'
+      );
+      return templateNameProp?.value || null;
+    } catch (error) {
+      console.error(`Failed to get process template for project ${projectName}:`, error);
+      return null;
+    }
+  }
+
+  // Get state definitions for a work item type (name, color, category from DevOps)
+  async getWorkItemTypeStates(
+    projectName: string,
+    typeName: string
+  ): Promise<{ name: string; color: string; category: string }[]> {
+    try {
+      const response = await fetch(
+        `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitemtypes/${encodeURIComponent(typeName)}/states?api-version=7.0`,
+        { headers: this.headers }
+      );
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.value || []).map((s: { name: string; color: string; category: string }) => ({
+        name: s.name,
+        color: s.color,
+        category: s.category,
+      }));
+    } catch {
+      return [];
+    }
   }
 
   // Get work items from a specific project
@@ -177,12 +427,20 @@ export class AzureDevOpsService {
   // Set ticketsOnly=false to get all work items regardless of tags
   async getTickets(
     projectName: string,
-    options?: { additionalFilters?: string; ticketsOnly?: boolean }
+    options?: {
+      additionalFilters?: string;
+      ticketsOnly?: boolean;
+      allowedTypes?: string[];
+    }
   ): Promise<DevOpsWorkItem[]> {
-    const { additionalFilters, ticketsOnly = true } = options || {};
+    const { additionalFilters, ticketsOnly = true, allowedTypes } = options || {};
 
     // WIQL query - optionally filter by "ticket" tag
     const ticketTagClause = ticketsOnly ? "AND [System.Tags] CONTAINS 'ticket'" : '';
+    // Optionally restrict to specific work item types (e.g., exclude Epic, Feature, User Story)
+    const typeClause = allowedTypes?.length
+      ? `AND [System.WorkItemType] IN (${allowedTypes.map((t) => `'${escapeWiql(t)}'`).join(', ')})`
+      : '';
     const wiql = {
       query: `
         SELECT [System.Id], [System.Title], [System.State], [System.CreatedDate],
@@ -190,8 +448,9 @@ export class AzureDevOpsService {
                [System.Tags], [Microsoft.VSTS.Common.Priority], [System.Description],
                [System.WorkItemType], [System.AreaPath], [System.TeamProject]
         FROM WorkItems
-        WHERE [System.TeamProject] = '${projectName}'
+        WHERE [System.TeamProject] = '${escapeWiql(projectName)}'
           ${ticketTagClause}
+          ${typeClause}
           ${additionalFilters || ''}
         ORDER BY [System.ChangedDate] DESC
       `,
@@ -223,8 +482,30 @@ export class AzureDevOpsService {
 
     for (let i = 0; i < workItemIds.length; i += batchSize) {
       const batch = workItemIds.slice(i, i + batchSize);
+      const fields = [
+        'System.Title',
+        'System.Description',
+        'System.State',
+        'System.CreatedDate',
+        'System.ChangedDate',
+        'System.CreatedBy',
+        'System.AssignedTo',
+        'System.Tags',
+        'Microsoft.VSTS.Common.Priority',
+        'System.TeamProject',
+        'System.WorkItemType',
+        'System.AreaPath',
+        'Microsoft.VSTS.Common.ResolvedReason',
+        'Microsoft.VSTS.Common.Resolution',
+        'Microsoft.VSTS.TCM.ReproSteps',
+        'Microsoft.VSTS.TCM.SystemInfo',
+        'Custom.CustomerResponse',
+        'Microsoft.VSTS.Scheduling.CompletedWork',
+        'Microsoft.VSTS.Scheduling.RemainingWork',
+        'Microsoft.VSTS.Scheduling.OriginalEstimate',
+      ].join(',');
       const workItemsResponse = await fetch(
-        `${this.baseUrl}/_apis/wit/workitems?ids=${batch.join(',')}&$expand=all&api-version=7.0`,
+        `${this.baseUrl}/_apis/wit/workitems?ids=${batch.join(',')}&fields=${fields}&api-version=7.0`,
         { headers: this.headers }
       );
 
@@ -247,9 +528,48 @@ export class AzureDevOpsService {
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to fetch work item: ${response.statusText}`);
+      // Carry the status: callers that search every project need to tell
+      // "not in this project" apart from auth, throttling and outages.
+      throw new DevOpsApiError(
+        response.status,
+        `Failed to fetch work item: ${response.statusText}`
+      );
     }
 
+    return response.json();
+  }
+
+  // Lightweight check if a work item exists (org-level, no project needed, minimal fields)
+  // Returns: 'exists' | 'not_found' | 'error'
+  async workItemExists(workItemId: number): Promise<'exists' | 'not_found' | 'error'> {
+    const response = await fetch(
+      `${this.baseUrl}/_apis/wit/workitems/${workItemId}?fields=System.Id&api-version=7.0`,
+      { headers: this.headers }
+    );
+    if (response.ok) return 'exists';
+    if (response.status === 404) return 'not_found';
+    return 'error';
+  }
+
+  // Org-level fetch of a work item with the minimal fields needed for search/preview.
+  // Unlike getWorkItem, no project name is required and tag filters do not apply,
+  // so this finds any work item the user can access (Bug, Checkpoint, Feature, etc.).
+  async findWorkItemById(workItemId: number): Promise<DevOpsWorkItem | null> {
+    const fields = [
+      'System.Id',
+      'System.Title',
+      'System.State',
+      'System.WorkItemType',
+      'System.TeamProject',
+    ].join(',');
+    const response = await fetch(
+      `${this.baseUrl}/_apis/wit/workitems/${workItemId}?fields=${fields}&api-version=7.0`,
+      { headers: this.headers }
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      throw new Error(`Failed to fetch work item ${workItemId}: ${response.statusText}`);
+    }
     return response.json();
   }
 
@@ -288,6 +608,91 @@ export class AzureDevOpsService {
     );
   }
 
+  // Get work item update history (revisions with field changes)
+  async getWorkItemUpdates(projectName: string, workItemId: number): Promise<WorkItemUpdate[]> {
+    const response = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/${workItemId}/updates?api-version=7.0`,
+      { headers: this.headers }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch work item updates: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+
+    // Fields we care about for the history view
+    const trackedFields = new Set([
+      'System.State',
+      'System.AssignedTo',
+      'System.Title',
+      'Microsoft.VSTS.Common.Priority',
+      'System.Tags',
+      'System.AreaPath',
+    ]);
+
+    return (data.value || [])
+      .filter(
+        (update: {
+          id: number;
+          fields?: Record<string, { oldValue?: unknown; newValue?: unknown }>;
+        }) => {
+          // Skip revision 1 (creation) unless it has meaningful tracked fields
+          if (update.id === 1) return true;
+          if (!update.fields) return false;
+          // Only include updates that changed tracked fields
+          return Object.keys(update.fields).some((key) => trackedFields.has(key));
+        }
+      )
+      .map(
+        (update: {
+          id: number;
+          rev: number;
+          revisedBy: {
+            displayName: string;
+            uniqueName: string;
+            id: string;
+            imageUrl?: string;
+          };
+          revisedDate: string;
+          fields?: Record<string, { oldValue?: unknown; newValue?: unknown }>;
+        }) => {
+          // Filter fields to only tracked ones and normalize identity values
+          const fields: Record<string, { oldValue?: string; newValue?: string }> = {};
+          if (update.fields) {
+            for (const [key, value] of Object.entries(update.fields)) {
+              if (trackedFields.has(key)) {
+                const normalize = (v: unknown): string | undefined => {
+                  if (v == null) return undefined;
+                  if (typeof v === 'object' && v !== null && 'displayName' in v) {
+                    return (v as { displayName: string }).displayName;
+                  }
+                  return String(v);
+                };
+                fields[key] = {
+                  oldValue: normalize(value.oldValue),
+                  newValue: normalize(value.newValue),
+                };
+              }
+            }
+          }
+
+          return {
+            id: update.id,
+            rev: update.rev,
+            revisedBy: {
+              id: update.revisedBy.id,
+              displayName: update.revisedBy.displayName,
+              email: update.revisedBy.uniqueName,
+              avatarUrl: update.revisedBy.imageUrl,
+            },
+            revisedDate: update.revisedDate,
+            fields,
+          };
+        }
+      );
+  }
+
   // Create a new work item (ticket)
   // workItemType: the type to create (e.g., "Task", "Issue") - depends on process template
   // hasPriority: whether the process template supports Priority field
@@ -315,50 +720,177 @@ export class AzureDevOpsService {
       });
     }
 
-    const response = await fetch(
-      `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/$${workItemType}?api-version=7.0`,
-      {
-        method: 'POST',
-        headers: {
-          ...this.headers,
-          'Content-Type': 'application/json-patch+json',
-        },
-        body: JSON.stringify(patchDocument),
-      }
-    );
+    const createUrl = `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/$${workItemType}?api-version=7.0`;
+    const createHeaders = {
+      ...this.headers,
+      'Content-Type': 'application/json-patch+json',
+    };
+
+    const response = await fetch(createUrl, {
+      method: 'POST',
+      headers: createHeaders,
+      body: JSON.stringify(patchDocument),
+    });
 
     if (!response.ok) {
-      throw new Error(`Failed to create work item: ${response.statusText}`);
+      const errorText = await response.text();
+
+      // Handle required field validation errors by fetching defaults and retrying
+      const retryDoc = await this.resolveRequiredFieldErrors(
+        errorText,
+        patchDocument,
+        projectName,
+        workItemType
+      );
+      if (retryDoc) {
+        const retryResponse = await fetch(createUrl, {
+          method: 'POST',
+          headers: createHeaders,
+          body: JSON.stringify(retryDoc),
+        });
+        if (retryResponse.ok) {
+          return retryResponse.json();
+        }
+        const retryError = await retryResponse.text();
+        throw new Error(`Failed to create work item: ${retryResponse.statusText} - ${retryError}`);
+      }
+
+      throw new Error(`Failed to create work item: ${response.statusText} - ${errorText}`);
     }
 
     return response.json();
   }
 
+  // Get classification nodes (iterations or areas) for a project
+  private async getClassificationNodes(
+    projectName: string,
+    structureType: 'iterations' | 'areas',
+    depth: number = 10
+  ): Promise<ClassificationNode[]> {
+    const response = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/classificationnodes/${structureType}?$depth=${depth}&api-version=7.0`,
+      { headers: this.headers }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch ${structureType}: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return this.flattenClassificationNodes(
+      data,
+      structureType === 'iterations' ? 'iteration' : 'area'
+    );
+  }
+
+  // Flatten nested classification nodes into a flat list with full paths
+  private flattenClassificationNodes(
+    node: {
+      id: number;
+      name: string;
+      hasChildren: boolean;
+      children?: Array<{
+        id: number;
+        name: string;
+        hasChildren: boolean;
+        children?: unknown[];
+        path?: string;
+      }>;
+      path?: string;
+    },
+    structureType: 'area' | 'iteration',
+    parentPath: string = ''
+  ): ClassificationNode[] {
+    const currentPath = parentPath ? `${parentPath}\\${node.name}` : node.name;
+    const result: ClassificationNode[] = [
+      {
+        id: node.id,
+        name: node.name,
+        structureType,
+        hasChildren: node.hasChildren,
+        path: currentPath,
+      },
+    ];
+
+    if (node.children) {
+      for (const child of node.children) {
+        result.push(
+          ...this.flattenClassificationNodes(
+            child as {
+              id: number;
+              name: string;
+              hasChildren: boolean;
+              children?: Array<{
+                id: number;
+                name: string;
+                hasChildren: boolean;
+                children?: unknown[];
+                path?: string;
+              }>;
+              path?: string;
+            },
+            structureType,
+            currentPath
+          )
+        );
+      }
+    }
+
+    return result;
+  }
+
+  // Get all iterations for a project (flat list with paths)
+  async getIterations(projectName: string): Promise<ClassificationNode[]> {
+    return this.getClassificationNodes(projectName, 'iterations');
+  }
+
+  // Get all areas for a project (flat list with paths)
+  async getAreas(projectName: string): Promise<ClassificationNode[]> {
+    return this.getClassificationNodes(projectName, 'areas');
+  }
+
   // Create a new work item (ticket) with assignee and custom tags
-  // workItemType: the type to create (e.g., "Task", "Issue") - depends on process template
-  // hasPriority: whether the process template supports Priority field
   async createTicketWithAssignee(
     projectName: string,
     title: string,
     description: string,
-    _requesterEmail: string,
-    priority: number = 3,
-    tags: string[] = ['ticket'],
-    assigneeId?: string,
-    workItemType: string = 'Task',
-    hasPriority: boolean = true
+    options: {
+      priority?: number | string;
+      tags?: string[];
+      assigneeId?: string;
+      workItemType?: string;
+      hasPriority?: boolean;
+      priorityFieldRef?: string;
+      additionalFields?: Record<string, string | number>;
+      iterationPath?: string;
+      areaPath?: string;
+      parentId?: number;
+    } = {}
   ): Promise<DevOpsWorkItem> {
+    const {
+      priority,
+      tags = ['ticket'],
+      assigneeId,
+      workItemType = 'Task',
+      hasPriority = true,
+      priorityFieldRef,
+      additionalFields,
+      iterationPath,
+      areaPath,
+      parentId,
+    } = options;
     const patchDocument: Array<{ op: string; path: string; value: string | number }> = [
       { op: 'add', path: '/fields/System.Title', value: title },
       { op: 'add', path: '/fields/System.Description', value: description },
       { op: 'add', path: '/fields/System.Tags', value: tags.join('; ') },
     ];
 
-    // Only add Priority if the template supports it
-    if (hasPriority) {
+    // Only add Priority if the template supports it and a value was provided
+    if (hasPriority && priority != null && priority !== '') {
+      const fieldPath = priorityFieldRef || 'Microsoft.VSTS.Common.Priority';
       patchDocument.push({
         op: 'add',
-        path: '/fields/Microsoft.VSTS.Common.Priority',
+        path: `/fields/${fieldPath}`,
         value: priority,
       });
     }
@@ -367,24 +899,175 @@ export class AzureDevOpsService {
       patchDocument.push({ op: 'add', path: '/fields/System.AssignedTo', value: assigneeId });
     }
 
-    const response = await fetch(
-      `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/$${workItemType}?api-version=7.0`,
-      {
-        method: 'POST',
-        headers: {
-          ...this.headers,
-          'Content-Type': 'application/json-patch+json',
-        },
-        body: JSON.stringify(patchDocument),
+    if (iterationPath) {
+      patchDocument.push({ op: 'add', path: '/fields/System.IterationPath', value: iterationPath });
+    }
+
+    if (areaPath) {
+      patchDocument.push({ op: 'add', path: '/fields/System.AreaPath', value: areaPath });
+    }
+
+    // Append any additional required fields, excluding fields already set above
+    const reservedFields = new Set([
+      'System.Title',
+      'System.Description',
+      'System.Tags',
+      'System.AssignedTo',
+    ]);
+    if (additionalFields) {
+      for (const [key, value] of Object.entries(additionalFields)) {
+        if (value != null && value !== '' && !reservedFields.has(key)) {
+          patchDocument.push({ op: 'add', path: `/fields/${key}`, value });
+        }
       }
-    );
+    }
+
+    // Optional parent link. Relations use a different value shape than fields,
+    // so they're appended outside patchDocument (which is reused on retry).
+    const parentRelation =
+      typeof parentId === 'number' && Number.isInteger(parentId) && parentId > 0
+        ? {
+            op: 'add',
+            path: '/relations/-',
+            value: {
+              rel: 'System.LinkTypes.Hierarchy-Reverse',
+              url: `${this.baseUrl}/_apis/wit/workItems/${parentId}`,
+            },
+          }
+        : null;
+    const buildBody = (
+      doc: Array<{ op: string; path: string; value: string | number }>
+    ): unknown[] => (parentRelation ? [...doc, parentRelation] : doc);
+
+    const createUrl = `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/$${workItemType}?api-version=7.0`;
+    const createHeaders = {
+      ...this.headers,
+      'Content-Type': 'application/json-patch+json',
+    };
+
+    const response = await fetch(createUrl, {
+      method: 'POST',
+      headers: createHeaders,
+      body: JSON.stringify(buildBody(patchDocument)),
+    });
 
     if (!response.ok) {
       const errorText = await response.text();
+
+      // Handle required field validation errors by fetching defaults and retrying
+      const retryDoc = await this.resolveRequiredFieldErrors(
+        errorText,
+        patchDocument,
+        projectName,
+        workItemType
+      );
+      if (retryDoc) {
+        const retryResponse = await fetch(createUrl, {
+          method: 'POST',
+          headers: createHeaders,
+          body: JSON.stringify(buildBody(retryDoc)),
+        });
+        if (retryResponse.ok) {
+          return retryResponse.json();
+        }
+        const retryError = await retryResponse.text();
+        throw new Error(`Failed to create work item: ${retryResponse.statusText} - ${retryError}`);
+      }
+
       throw new Error(`Failed to create work item: ${response.statusText} - ${errorText}`);
     }
 
     return response.json();
+  }
+
+  /**
+   * Parse RuleValidationException errors, fetch allowed values for required fields,
+   * and return an updated patch document with defaults. Returns null if not applicable.
+   */
+  private async resolveRequiredFieldErrors(
+    errorText: string,
+    patchDocument: Array<{ op: string; path: string; value: string | number }>,
+    projectName: string,
+    workItemType: string
+  ): Promise<Array<{ op: string; path: string; value: string | number }> | null> {
+    try {
+      const errorData = JSON.parse(errorText);
+      const ruleErrors = errorData?.customProperties?.RuleValidationErrors;
+      if (!ruleErrors || !Array.isArray(ruleErrors) || ruleErrors.length === 0) {
+        return null;
+      }
+
+      const existingFields = new Set(patchDocument.map((d) => d.path));
+      const retryDoc = [...patchDocument];
+      let addedFields = 0;
+
+      // Only auto-fill fields with constrained value lists (e.g., Severity, Priority).
+      // Skip identity/people fields — those require user input via the UI.
+      const IDENTITY_FIELD_PREFIXES = ['Custom.FoundBy', 'System.AssignedTo', 'System.CreatedBy'];
+
+      for (const ruleError of ruleErrors) {
+        const fieldRef: string = ruleError.fieldReferenceName;
+        if (!fieldRef || existingFields.has(`/fields/${fieldRef}`)) continue;
+
+        // Never auto-fill identity fields — they need explicit user selection
+        if (IDENTITY_FIELD_PREFIXES.some((p) => fieldRef.startsWith(p))) {
+          console.warn(`Skipping auto-fill for identity field ${fieldRef} — requires user input`);
+          continue;
+        }
+
+        try {
+          const fieldUrl = `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitemtypes/${encodeURIComponent(workItemType)}/fields/${encodeURIComponent(fieldRef)}?$expand=allowedValues&api-version=7.1`;
+          const fieldResponse = await fetch(fieldUrl, { headers: this.headers });
+          if (fieldResponse.ok) {
+            const fieldData = await fieldResponse.json();
+            const allowedValues: string[] = fieldData.allowedValues || [];
+            // Only auto-fill if the field has a small, constrained set of values
+            if (allowedValues.length > 0 && allowedValues.length <= 20) {
+              retryDoc.push({
+                op: 'add',
+                path: `/fields/${fieldRef}`,
+                value: allowedValues[0],
+              });
+              addedFields++;
+              console.log(
+                `Auto-filling required field ${fieldRef}: "${allowedValues[0]}" (${allowedValues.length} options)`
+              );
+            } else if (allowedValues.length > 20) {
+              console.warn(
+                `Skipping auto-fill for ${fieldRef} — too many options (${allowedValues.length}), requires user input`
+              );
+            }
+          }
+        } catch (fieldErr) {
+          console.warn(`Could not fetch allowed values for ${fieldRef}:`, fieldErr);
+        }
+      }
+
+      return addedFields > 0 ? retryDoc : null;
+    } catch {
+      return null;
+    }
+  }
+
+  // Get field info for a work item type (including allowed values and whether it's required)
+  async getWorkItemTypeField(
+    projectName: string,
+    workItemType: string,
+    fieldRef: string
+  ): Promise<{ required: boolean; allowedValues: string[]; name: string }> {
+    const url = `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitemtypes/${encodeURIComponent(workItemType)}/fields/${encodeURIComponent(fieldRef)}?$expand=allowedValues&api-version=7.1`;
+    const response = await fetch(url, { headers: this.headers });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch field info: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    return {
+      required: data.alwaysRequired || false,
+      allowedValues: data.allowedValues || [],
+      name: data.name || fieldRef,
+    };
   }
 
   // Add a comment to a work item
@@ -401,6 +1084,203 @@ export class AzureDevOpsService {
     if (!response.ok) {
       throw new Error(`Failed to add comment: ${response.statusText}`);
     }
+  }
+
+  // Delete a work item — moves it to the DevOps Recycle Bin (reversible).
+  // Pass destroy=true for a permanent, unrecoverable delete; whether the
+  // caller is allowed to do that is enforced by DevOps based on the user's
+  // role/PAT scope (no ZapDesk-side admin gate). Throws DevOpsApiError on
+  // failure so callers can branch on `.status` cleanly.
+  async deleteWorkItem(workItemId: number, destroy: boolean = false): Promise<void> {
+    const url = `${this.baseUrl}/_apis/wit/workitems/${workItemId}?destroy=${destroy ? 'true' : 'false'}&api-version=7.0`;
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: this.headers,
+    });
+
+    if (!response.ok) {
+      // Truncate upstream body so a verbose HTML/JSON error page can't blow up
+      // logs or echo internal details back to the client via the thrown message.
+      const rawBody = await response.text().catch(() => '');
+      const snippet = rawBody.slice(0, 200).trim();
+      const tail = rawBody.length > snippet.length ? '…' : '';
+      throw new DevOpsApiError(
+        response.status,
+        `Failed to delete work item: ${response.status} ${response.statusText}${snippet ? ` - ${snippet}${tail}` : ''}`
+      );
+    }
+  }
+
+  // Change work item type (e.g., Task → Bug)
+  // Azure DevOps supports this via PATCH with System.WorkItemType in the JSON patch body
+  async changeWorkItemType(
+    projectName: string,
+    workItemId: number,
+    newType: string,
+    additionalFields?: Record<string, string | number>
+  ): Promise<DevOpsWorkItem> {
+    // First, get the current work item to read its current state
+    const currentItem = await this.getWorkItem(projectName, workItemId);
+    const currentState = currentItem.fields['System.State'];
+
+    // Get valid states for the target work item type
+    let targetState = currentState;
+    try {
+      const statesUrl = `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitemtypes/${encodeURIComponent(newType)}/states?api-version=7.1`;
+      const statesResponse = await fetch(statesUrl, { headers: this.headers });
+      if (statesResponse.ok) {
+        const statesData = await statesResponse.json();
+        const validStates: { name: string; category: string }[] = statesData.value;
+        const validStateNames = validStates.map((s) => s.name);
+
+        if (!validStateNames.includes(currentState)) {
+          // Try to find a state in the same category as the current state
+          const currentTypeStatesUrl = `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitemtypes/${encodeURIComponent(currentItem.fields['System.WorkItemType'])}/states?api-version=7.1`;
+          const currentStatesResponse = await fetch(currentTypeStatesUrl, {
+            headers: this.headers,
+          });
+          let currentCategory = 'Proposed';
+          if (currentStatesResponse.ok) {
+            const currentStatesData = await currentStatesResponse.json();
+            const currentStateInfo = currentStatesData.value.find(
+              (s: { name: string }) => s.name === currentState
+            );
+            if (currentStateInfo) {
+              currentCategory = currentStateInfo.category;
+            }
+          }
+
+          // Find a matching state by category, or fall back to first state
+          const matchByCategory = validStates.find((s) => s.category === currentCategory);
+          targetState = matchByCategory ? matchByCategory.name : validStates[0]?.name || 'New';
+        }
+
+        console.log(
+          `Type change: ${currentItem.fields['System.WorkItemType']} → ${newType}, state: ${currentState} → ${targetState}, valid states: [${validStateNames.join(', ')}]`
+        );
+      } else {
+        console.warn('Failed to fetch states for target type:', statesResponse.status);
+      }
+    } catch (err) {
+      console.warn('Could not fetch valid states for target type, keeping current state:', err);
+    }
+
+    // Per Microsoft docs: use org-level URL (no project), set both WorkItemType and State
+    // See: https://learn.microsoft.com/en-us/rest/api/azure/devops/wit/work-items/update
+    const patchDoc: Array<{ op: string; path: string; value: string | number }> = [
+      {
+        op: 'add',
+        path: '/fields/System.WorkItemType',
+        value: newType,
+      },
+      {
+        op: 'add',
+        path: '/fields/System.State',
+        value: targetState,
+      },
+    ];
+
+    // Add any additional fields (e.g. Severity, Found By for Enhancement type)
+    if (additionalFields) {
+      for (const [fieldRef, value] of Object.entries(additionalFields)) {
+        patchDoc.push({
+          op: 'add',
+          path: `/fields/${fieldRef}`,
+          value,
+        });
+      }
+    }
+
+    console.log(`Changing work item ${workItemId} type to ${newType} with state ${targetState}`);
+
+    const url = `${this.baseUrl}/_apis/wit/workitems/${workItemId}?api-version=7.1`;
+    const patchHeaders = {
+      ...this.headers,
+      'Content-Type': 'application/json-patch+json',
+    };
+
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: patchHeaders,
+      body: JSON.stringify(patchDoc),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+
+      // Check for required field validation errors and retry with defaults
+      try {
+        const errorData = JSON.parse(errorText);
+        const ruleErrors = errorData?.customProperties?.RuleValidationErrors;
+        if (ruleErrors && Array.isArray(ruleErrors) && ruleErrors.length > 0) {
+          console.log('Type change has required field errors, fetching defaults...');
+          const retryPatchDoc = [...patchDoc];
+
+          for (const ruleError of ruleErrors) {
+            const fieldRef: string = ruleError.fieldReferenceName;
+            if (!fieldRef) continue;
+
+            // Skip fields we already set
+            if (fieldRef === 'System.WorkItemType' || fieldRef === 'System.State') continue;
+
+            // Fetch allowed values for this field
+            try {
+              const fieldUrl = `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitemtypes/${encodeURIComponent(newType)}/fields/${encodeURIComponent(fieldRef)}?$expand=allowedValues&api-version=7.1`;
+              const fieldResponse = await fetch(fieldUrl, {
+                headers: this.headers,
+              });
+              if (fieldResponse.ok) {
+                const fieldData = await fieldResponse.json();
+                const allowedValues: string[] = fieldData.allowedValues || [];
+                if (allowedValues.length > 0) {
+                  // Use the first allowed value as default
+                  retryPatchDoc.push({
+                    op: 'add',
+                    path: `/fields/${fieldRef}`,
+                    value: allowedValues[0],
+                  });
+                  console.log(
+                    `Setting default for ${fieldRef}: "${allowedValues[0]}" (from ${allowedValues.length} options)`
+                  );
+                }
+              }
+            } catch (fieldErr) {
+              console.warn(`Could not fetch allowed values for ${fieldRef}:`, fieldErr);
+            }
+          }
+
+          // Retry with defaults for required fields
+          if (retryPatchDoc.length > patchDoc.length) {
+            console.log('Retrying type change with required field defaults...');
+            const retryResponse = await fetch(url, {
+              method: 'PATCH',
+              headers: patchHeaders,
+              body: JSON.stringify(retryPatchDoc),
+            });
+
+            if (retryResponse.ok) {
+              return retryResponse.json();
+            }
+
+            const retryError = await retryResponse.text();
+            console.error('Retry also failed:', retryResponse.status, retryError);
+            throw new Error(
+              `Failed to change work item type: ${retryResponse.statusText} - ${retryError}`
+            );
+          }
+        }
+      } catch (parseErr) {
+        // If error isn't JSON or retry logic fails, fall through to original error
+        if (parseErr instanceof Error && parseErr.message.startsWith('Failed to change')) {
+          throw parseErr;
+        }
+      }
+
+      console.error('Change type API response:', response.status, errorText);
+      throw new Error(`Failed to change work item type: ${response.statusText} - ${errorText}`);
+    }
+
+    return response.json();
   }
 
   // Update work item state
@@ -424,22 +1304,70 @@ export class AzureDevOpsService {
     );
 
     if (!response.ok) {
-      throw new Error(`Failed to update work item: ${response.statusText}`);
+      // DevOps returns a structured error body for blocked transitions
+      // ("TF401320: Rule Error… transition not allowed"). Surface that so
+      // the route can pass through a clear, user-facing reason instead of
+      // collapsing it to a bare status code (issue #391).
+      let detail = response.statusText;
+      try {
+        const body = await response.text();
+        if (body) {
+          try {
+            const parsed = JSON.parse(body) as { message?: string };
+            if (parsed.message) detail = parsed.message;
+          } catch {
+            detail = body.slice(0, 500);
+          }
+        }
+      } catch {
+        // Body read failure — keep the status-text fallback above.
+      }
+      throw new DevOpsApiError(response.status, `Failed to update work item state: ${detail}`);
     }
 
     return response.json();
   }
 
-  // Update work item fields (assignee, priority)
+  // Update work item fields (assignee, priority, title, description)
   async updateTicketFields(
     projectName: string,
     workItemId: number,
     updates: {
       assignee?: string | null;
       priority?: number;
+      title?: string;
+      description?: string;
+      tags?: string[];
+      resolution?: string;
+      mitigation?: string;
+      workItemType?: string;
     }
   ): Promise<DevOpsWorkItem> {
     const patchDocument: Array<{ op: string; path: string; value: string | number | null }> = [];
+
+    if (updates.tags !== undefined) {
+      patchDocument.push({
+        op: 'replace',
+        path: '/fields/System.Tags',
+        value: updates.tags.join('; '),
+      });
+    }
+
+    if (updates.title !== undefined) {
+      patchDocument.push({
+        op: 'add',
+        path: '/fields/System.Title',
+        value: updates.title,
+      });
+    }
+
+    if (updates.description !== undefined) {
+      patchDocument.push({
+        op: 'add',
+        path: '/fields/System.Description',
+        value: updates.description,
+      });
+    }
 
     if (updates.assignee !== undefined) {
       if (updates.assignee === null) {
@@ -460,6 +1388,67 @@ export class AzureDevOpsService {
         path: '/fields/Microsoft.VSTS.Common.Priority',
         value: updates.priority,
       });
+    }
+
+    if (updates.resolution !== undefined) {
+      const templateConfig = getTemplateConfig();
+      let resFieldRef = getResolutionFieldRef(updates.workItemType || '', templateConfig);
+
+      // If using a custom field ref, verify it exists on this work item type
+      // Falls back to standard Resolution field if the custom field isn't set up
+      const standardField = 'Microsoft.VSTS.Common.Resolution';
+      if (resFieldRef !== standardField && updates.workItemType) {
+        try {
+          await this.getWorkItemTypeField(projectName, updates.workItemType, resFieldRef);
+        } catch {
+          console.warn(
+            `Resolution field ${resFieldRef} not found on ${updates.workItemType}, falling back to ${standardField}`
+          );
+          resFieldRef = standardField;
+        }
+      }
+
+      patchDocument.push({
+        op: 'add',
+        path: `/fields/${resFieldRef}`,
+        value: updates.resolution,
+      });
+    }
+
+    if (updates.mitigation !== undefined && updates.workItemType) {
+      const templateConfig = getTemplateConfig();
+      let mitFieldRef = getMitigationFieldRef(updates.workItemType, templateConfig);
+
+      // Always probe the field to ensure it exists on this work item type
+      try {
+        await this.getWorkItemTypeField(projectName, updates.workItemType, mitFieldRef);
+      } catch {
+        // Try the standard CMMI field as fallback
+        const standardMitField = 'Microsoft.VSTS.CMMI.Mitigation';
+        if (mitFieldRef !== standardMitField) {
+          console.warn(
+            `Mitigation field ${mitFieldRef} not found on ${updates.workItemType}, trying ${standardMitField}`
+          );
+          try {
+            await this.getWorkItemTypeField(projectName, updates.workItemType, standardMitField);
+            mitFieldRef = standardMitField;
+          } catch {
+            console.warn(`Mitigation field not available on ${updates.workItemType}`);
+            mitFieldRef = '';
+          }
+        } else {
+          console.warn(`Mitigation field not available on ${updates.workItemType}`);
+          mitFieldRef = '';
+        }
+      }
+
+      if (mitFieldRef) {
+        patchDocument.push({
+          op: 'add',
+          path: `/fields/${mitFieldRef}`,
+          value: updates.mitigation,
+        });
+      }
     }
 
     if (patchDocument.length === 0) {
@@ -486,28 +1475,251 @@ export class AzureDevOpsService {
     return response.json();
   }
 
-  // Get all tickets from all accessible projects
-  // Set ticketsOnly=false to get all work items (not just those tagged as "ticket")
-  async getAllTickets(ticketsOnly: boolean = true): Promise<Ticket[]> {
+  // Upload an attachment to Azure DevOps
+  async uploadAttachment(
+    projectName: string,
+    fileName: string,
+    fileContent: ArrayBuffer,
+    contentType: string
+  ): Promise<{ id: string; url: string }> {
+    const encodedFileName = encodeURIComponent(fileName);
+    const response = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/attachments?fileName=${encodedFileName}&api-version=7.0`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.accessToken}`,
+          'Content-Type': 'application/octet-stream',
+        },
+        body: fileContent,
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to upload attachment: ${response.statusText} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    return { id: data.id, url: data.url };
+  }
+
+  // Link an uploaded attachment to a work item
+  async linkAttachmentToWorkItem(
+    projectName: string,
+    workItemId: number,
+    attachmentUrl: string,
+    fileName: string,
+    comment?: string
+  ): Promise<void> {
+    const patchDocument = [
+      {
+        op: 'add',
+        path: '/relations/-',
+        value: {
+          rel: 'AttachedFile',
+          url: attachmentUrl,
+          attributes: {
+            comment: comment || fileName,
+          },
+        },
+      },
+    ];
+
+    const response = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/${workItemId}?api-version=7.0`,
+      {
+        method: 'PATCH',
+        headers: {
+          ...this.headers,
+          'Content-Type': 'application/json-patch+json',
+        },
+        body: JSON.stringify(patchDocument),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to link attachment: ${response.statusText} - ${errorText}`);
+    }
+  }
+
+  // Upload and link an attachment to a work item in one operation
+  async addAttachmentToWorkItem(
+    projectName: string,
+    workItemId: number,
+    fileName: string,
+    fileContent: ArrayBuffer,
+    contentType: string,
+    comment?: string
+  ): Promise<{ id: string; url: string }> {
+    // Step 1: Upload the attachment
+    const uploadResult = await this.uploadAttachment(
+      projectName,
+      fileName,
+      fileContent,
+      contentType
+    );
+
+    // Step 2: Link it to the work item
+    await this.linkAttachmentToWorkItem(
+      projectName,
+      workItemId,
+      uploadResult.url,
+      fileName,
+      comment
+    );
+
+    return uploadResult;
+  }
+
+  // Get attachments for a work item
+  async getWorkItemAttachments(projectName: string, workItemId: number): Promise<Attachment[]> {
+    const response = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/${workItemId}?$expand=relations&api-version=7.0`,
+      { headers: this.headers }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch work item relations: ${response.statusText}`);
+    }
+
+    const workItem = await response.json();
+    const attachments: Attachment[] = [];
+
+    // Filter relations for AttachedFile type
+    for (const relation of workItem.relations || []) {
+      if (relation.rel === 'AttachedFile') {
+        // Extract attachment ID from URL
+        const attachmentUrl = relation.url;
+        const idMatch = attachmentUrl.match(/attachments\/([a-f0-9-]+)/i);
+        const id = idMatch ? idMatch[1] : attachmentUrl;
+
+        // Parse filename from attributes or URL
+        const fileName =
+          relation.attributes?.name ||
+          relation.attributes?.comment ||
+          attachmentUrl.split('/').pop()?.split('?')[0] ||
+          'attachment';
+
+        attachments.push({
+          id,
+          fileName,
+          url: attachmentUrl,
+          contentType: relation.attributes?.contentType || 'application/octet-stream',
+          size: relation.attributes?.length || 0,
+          createdAt: new Date(relation.attributes?.resourceCreatedDate || Date.now()),
+        });
+      }
+    }
+
+    return attachments;
+  }
+
+  /**
+   * Find which project a work item belongs to by checking all accessible projects.
+   * Returns the project and the work item, or null if not found.
+   */
+  async findProjectForWorkItem(
+    workItemId: number
+  ): Promise<{ project: DevOpsProject; workItem: DevOpsWorkItem } | null> {
     const projects = await this.getProjects();
-    const allTickets: Ticket[] = [];
 
     for (const project of projects) {
       try {
-        const workItems = await this.getTickets(project.name, { ticketsOnly });
+        const workItem = await this.getWorkItem(project.name, workItemId);
+        if (workItem) {
+          return { project, workItem };
+        }
+      } catch {
+        // Work item not in this project, continue
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  // Get all tickets from all accessible projects (fetches in parallel)
+  // Set ticketsOnly=false to get all work items (not just those tagged as "ticket")
+  async getAllTickets(ticketsOnly: boolean = true, allowedTypes?: string[]): Promise<Ticket[]> {
+    const projects = await this.getProjects();
+    const slaMap = await getProjectSLAMap();
+
+    const results = await Promise.allSettled(
+      projects.map(async (project) => {
+        const workItems = await this.getTickets(project.name, {
+          ticketsOnly,
+          allowedTypes,
+        });
+        const slaLevel = slaMap[project.name] || DEFAULT_SLA_LEVEL;
         const organization: Organization = {
           id: project.id,
           name: project.name,
           devOpsProject: project.name,
           devOpsOrg: this.organization,
-          tags: [],
+          tags: [slaLevel.toLowerCase()],
+          slaLevel,
           createdAt: new Date(),
           updatedAt: new Date(),
         };
-        const tickets = workItems.map((wi) => workItemToTicket(wi, organization));
-        allTickets.push(...tickets);
-      } catch (error) {
-        console.error(`Failed to fetch tickets from ${project.name}:`, error);
+        return workItems.map((wi) => {
+          const ticket = workItemToTicket(wi, organization);
+
+          // Populate SLA-relevant timestamps from work item fields
+          const fields = wi.fields || {};
+
+          // Populate resolvedAt from known resolved date fields
+          if (!ticket.resolvedAt) {
+            const resolvedFieldNames = [
+              'Microsoft.VSTS.Common.ResolvedDate',
+              'Custom.ResolvedDate',
+              'System.ResolvedDate',
+            ];
+            for (const fieldName of resolvedFieldNames) {
+              const value = fields[fieldName as keyof typeof fields];
+              if (value) {
+                const resolvedDate = new Date(value as string);
+                if (!isNaN(resolvedDate.getTime())) {
+                  ticket.resolvedAt = resolvedDate;
+                  break;
+                }
+              }
+            }
+          }
+
+          // Populate firstResponseAt from known first-response date fields
+          if (!ticket.firstResponseAt) {
+            const firstResponseFieldNames = [
+              'Custom.FirstResponseDate',
+              'Microsoft.VSTS.Common.FirstResponseDate',
+            ];
+            for (const fieldName of firstResponseFieldNames) {
+              const value = fields[fieldName as keyof typeof fields];
+              if (value) {
+                const firstResponseDate = new Date(value as string);
+                if (!isNaN(firstResponseDate.getTime())) {
+                  ticket.firstResponseAt = firstResponseDate;
+                  break;
+                }
+              }
+            }
+          }
+
+          // Calculate SLA info for the ticket using the populated timestamps
+          ticket.slaInfo = calculateTicketSLA(ticket, slaLevel);
+          return ticket;
+        });
+      })
+    );
+
+    const allTickets: Ticket[] = [];
+    for (let i = 0; i < results.length; i++) {
+      const result = results[i];
+      if (result.status === 'fulfilled') {
+        allTickets.push(...result.value);
+      } else {
+        console.error(`Failed to fetch tickets from ${projects[i].name}:`, result.reason);
       }
     }
 
@@ -735,7 +1947,16 @@ export class AzureDevOpsService {
       const data = await response.json();
       for (const member of data.members || []) {
         const email = member.user?.principalName;
-        const displayName = member.user?.displayName || email;
+        const rawDisplayName = member.user?.displayName || email;
+        // If displayName is a full email address, derive a readable name from it
+        const displayName =
+          rawDisplayName && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawDisplayName)
+            ? rawDisplayName
+                .split('@')[0]
+                .replace(/[._-]/g, ' ')
+                .toLowerCase()
+                .replace(/\b\w/g, (c: string) => c.toUpperCase())
+            : rawDisplayName;
         const id = member.id || member.user?.id || email;
         const license =
           member.accessLevel?.licenseDisplayName || member.accessLevel?.accountLicenseType;
@@ -758,6 +1979,96 @@ export class AzureDevOpsService {
     return users;
   }
 
+  // Get work items in a project that can be selected as a parent
+  // (Epic, Feature, User Story / Product Backlog Item / Requirement).
+  // Includes each item's parent ID so the UI can cascade-filter.
+  async getPotentialParents(projectName: string): Promise<
+    Array<{
+      id: number;
+      title: string;
+      workItemType: string;
+      state: string;
+      areaPath: string;
+      parentId?: number;
+    }>
+  > {
+    // Include backlog parent types from all common process templates:
+    // Agile (User Story), Scrum (Product Backlog Item), CMMI (Requirement),
+    // plus Epic and Feature which exist in all.
+    const wiql = {
+      query: `
+        SELECT [System.Id], [System.Title], [System.WorkItemType],
+               [System.State], [System.AreaPath]
+        FROM WorkItems
+        WHERE [System.TeamProject] = '${escapeWiql(projectName)}'
+          AND [System.WorkItemType] IN ('Epic', 'Feature', 'User Story', 'Product Backlog Item', 'Requirement')
+          AND [System.State] NOT IN ('Closed', 'Removed', 'Done', 'Completed', 'Cut')
+        ORDER BY [System.WorkItemType], [System.ChangedDate] DESC
+      `,
+    };
+
+    const queryResponse = await fetch(
+      `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/wiql?api-version=7.0`,
+      {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify(wiql),
+      }
+    );
+
+    if (!queryResponse.ok) {
+      throw new Error(`Failed to query parent candidates: ${queryResponse.statusText}`);
+    }
+
+    const queryData = await queryResponse.json();
+    const workItemIds: number[] = (queryData.workItems || []).map((wi: { id: number }) => wi.id);
+    if (workItemIds.length === 0) return [];
+
+    // Batch in chunks of 200 to stay under the DevOps URL/ID limit
+    const chunks: number[][] = [];
+    for (let i = 0; i < workItemIds.length; i += 200) {
+      chunks.push(workItemIds.slice(i, i + 200));
+    }
+
+    // Need relations to derive each item's parent for cascade filtering;
+    // $expand=relations is incompatible with the fields parameter, so we expand all.
+    // Fail loudly if any chunk request fails — a partial list would let users
+    // pick the wrong parent (or hide a valid one) without realising it.
+    const all: Array<DevOpsWorkItem & { relations?: Array<{ rel: string; url: string }> }> = [];
+    for (const chunk of chunks) {
+      const detailsResponse = await fetch(
+        `${this.baseUrl}/_apis/wit/workitems?ids=${chunk.join(',')}&$expand=relations&api-version=7.0`,
+        { headers: this.headers }
+      );
+      if (!detailsResponse.ok) {
+        throw new Error(`Failed to fetch parent candidate details: ${detailsResponse.statusText}`);
+      }
+      const detailsData = await detailsResponse.json();
+      all.push(...(detailsData.value || []));
+    }
+
+    return all.map((wi) => {
+      let parentId: number | undefined;
+      for (const relation of wi.relations || []) {
+        if (relation.rel === 'System.LinkTypes.Hierarchy-Reverse' && relation.url) {
+          const idMatch = relation.url.match(/workItems\/(\d+)/);
+          if (idMatch) {
+            parentId = parseInt(idMatch[1], 10);
+            break;
+          }
+        }
+      }
+      return {
+        id: wi.id,
+        title: wi.fields['System.Title'],
+        workItemType: wi.fields['System.WorkItemType'],
+        state: wi.fields['System.State'],
+        areaPath: wi.fields['System.AreaPath'],
+        parentId,
+      };
+    });
+  }
+
   // Get all Epics from a project
   async getEpics(projectName: string): Promise<Epic[]> {
     const wiql = {
@@ -769,7 +2080,7 @@ export class AzureDevOpsService {
                [Microsoft.VSTS.Scheduling.RemainingWork],
                [Microsoft.VSTS.Scheduling.OriginalEstimate]
         FROM WorkItems
-        WHERE [System.TeamProject] = '${projectName}'
+        WHERE [System.TeamProject] = '${escapeWiql(projectName)}'
           AND [System.WorkItemType] = 'Epic'
         ORDER BY [System.ChangedDate] DESC
       `,
@@ -851,10 +2162,11 @@ export class AzureDevOpsService {
     const featuresData = await featuresResponse.json();
     return featuresData.value
       .filter((wi: DevOpsWorkItem) => wi.fields['System.WorkItemType'] === 'Feature')
-      .map((wi: DevOpsWorkItem) => this.mapToFeature(wi, epicId));
+      .map((wi: DevOpsWorkItem) => this.mapToFeature(wi, epicId))
+      .sort((a: Feature, b: Feature) => a.id - b.id);
   }
 
-  // Get Work Items under a Feature
+  // Get Tasks under a Feature (handles both direct Tasks and Tasks under User Stories)
   async getWorkItemsByFeature(projectName: string, featureId: number): Promise<WorkItem[]> {
     const response = await fetch(
       `${this.baseUrl}/${encodeURIComponent(projectName)}/_apis/wit/workitems/${featureId}?$expand=relations&api-version=7.0`,
@@ -882,9 +2194,9 @@ export class AzureDevOpsService {
       return [];
     }
 
-    // Fetch Work Item details
+    // Fetch direct children with relations (could be User Stories or Tasks)
     const workItemsResponse = await fetch(
-      `${this.baseUrl}/_apis/wit/workitems?ids=${childIds.join(',')}&$expand=all&api-version=7.0`,
+      `${this.baseUrl}/_apis/wit/workitems?ids=${childIds.join(',')}&$expand=relations&api-version=7.0`,
       { headers: this.headers }
     );
 
@@ -893,7 +2205,50 @@ export class AzureDevOpsService {
     }
 
     const workItemsData = await workItemsResponse.json();
-    return workItemsData.value.map((wi: DevOpsWorkItem) => this.mapToWorkItem(wi, featureId));
+    const allWorkItems: WorkItem[] = [];
+    const grandchildIds: number[] = [];
+    const grandchildParentMap = new Map<number, number>(); // grandchild ID → parent (User Story) ID
+
+    // Process direct children - collect all work items and find grandchildren
+    for (const wi of workItemsData.value as DevOpsWorkItem[]) {
+      // Add all work items (Task, Bug, Issue, User Story, etc.)
+      allWorkItems.push(this.mapToWorkItem(wi, featureId));
+
+      // Also check for children (e.g., Tasks under User Stories)
+      const wiWithRelations = wi as DevOpsWorkItem & {
+        relations?: Array<{ rel: string; url: string }>;
+      };
+      for (const relation of wiWithRelations.relations || []) {
+        if (relation.rel === 'System.LinkTypes.Hierarchy-Forward' && relation.url) {
+          const idMatch = relation.url.match(/workItems\/(\d+)/);
+          if (idMatch) {
+            const grandchildId = parseInt(idMatch[1], 10);
+            grandchildIds.push(grandchildId);
+            grandchildParentMap.set(grandchildId, wi.id);
+          }
+        }
+      }
+    }
+
+    // Fetch grandchildren (all work items under User Stories, etc.)
+    if (grandchildIds.length > 0) {
+      const grandchildResponse = await fetch(
+        `${this.baseUrl}/_apis/wit/workitems?ids=${grandchildIds.join(',')}&$expand=all&api-version=7.0`,
+        { headers: this.headers }
+      );
+
+      if (grandchildResponse.ok) {
+        const grandchildData = await grandchildResponse.json();
+        for (const wi of grandchildData.value as DevOpsWorkItem[]) {
+          // Set parentId to the User Story (or other intermediate parent), not the feature
+          const parentId = grandchildParentMap.get(wi.id) ?? featureId;
+          allWorkItems.push(this.mapToWorkItem(wi, parentId));
+        }
+      }
+    }
+
+    // Sort by ID for consistent ordering
+    return allWorkItems.sort((a, b) => a.id - b.id);
   }
 
   // Get full Epic hierarchy with Features and Work Items for treemap
@@ -922,6 +2277,16 @@ export class AzureDevOpsService {
       feature.remainingWork = feature.workItems.reduce((sum, wi) => sum + wi.remainingWork, 0);
       feature.totalWork = feature.completedWork + feature.remainingWork;
     }
+
+    // Sort features by backlog order (lower = higher priority / earlier in chain)
+    // Agile/CMMI use StackRank, Scrum uses BacklogPriority
+    features.sort((a, b) => {
+      const aOrder = a.backlogPriority ?? a.stackRank ?? Number.MAX_SAFE_INTEGER;
+      const bOrder = b.backlogPriority ?? b.stackRank ?? Number.MAX_SAFE_INTEGER;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+      // Fall back to ID for stable sorting if order values are equal
+      return a.id - b.id;
+    });
 
     epic.features = features;
     // Calculate totals for epic
@@ -1018,6 +2383,9 @@ export class AzureDevOpsService {
       updatedAt: new Date(fields['System.ChangedDate']),
       completedWork: (fields['Microsoft.VSTS.Scheduling.CompletedWork'] as number) || 0,
       remainingWork: (fields['Microsoft.VSTS.Scheduling.RemainingWork'] as number) || 0,
+      originalEstimate: (fields['Microsoft.VSTS.Scheduling.OriginalEstimate'] as number) || 0,
+      // Sum all effort fields (stored in days in Azure DevOps) and convert to hours (8h/day)
+      effort: sumEffortFields(fields),
       totalWork: 0,
       workItems: [],
       devOpsUrl:
@@ -1029,6 +2397,8 @@ export class AzureDevOpsService {
           .map((t: string) => t.trim())
           .filter(Boolean) || [],
       priority: mapPriority(fields['Microsoft.VSTS.Common.Priority']),
+      stackRank: fields['Microsoft.VSTS.Common.StackRank'] as number | undefined,
+      backlogPriority: fields['Microsoft.VSTS.Common.BacklogPriority'] as number | undefined,
     };
   }
 
@@ -1059,7 +2429,249 @@ export class AzureDevOpsService {
           .map((t: string) => t.trim())
           .filter(Boolean) || [],
       priority: mapPriority(fields['Microsoft.VSTS.Common.Priority']),
+      resolution: readResolutionField(fields),
+      mitigation: readMitigationField(fields),
+      resolvedReason: (fields['Microsoft.VSTS.Common.ResolvedReason'] as string) || undefined,
     };
+  }
+
+  // Fetch current iteration path for each project (cached per-org)
+  async getCurrentIterations(): Promise<Map<string, string>> {
+    const cached = currentIterationsCache.get(this.organization);
+    if (cached) {
+      if (Date.now() - cached.timestamp < CURRENT_ITERATIONS_TTL_MS) {
+        return cached.data;
+      }
+      // Expired — evict so the map doesn't accumulate stale per-org entries forever.
+      currentIterationsCache.delete(this.organization);
+    }
+    const inFlight = currentIterationsInFlight.get(this.organization);
+    if (inFlight) return inFlight;
+
+    const promise = this.fetchCurrentIterations();
+    currentIterationsInFlight.set(this.organization, promise);
+    try {
+      const data = await promise;
+      currentIterationsCache.set(this.organization, { data, timestamp: Date.now() });
+      return data;
+    } finally {
+      currentIterationsInFlight.delete(this.organization);
+    }
+  }
+
+  private async fetchCurrentIterations(): Promise<Map<string, string>> {
+    const result = new Map<string, string>();
+
+    try {
+      const projects = await this.getProjects();
+      if (!projects || projects.length === 0) return result;
+
+      const iterationResults = await Promise.allSettled(
+        projects.map(async (project) => {
+          try {
+            // Resolve the default team for this project
+            let teamName = project.name;
+            try {
+              const teamsResponse = await fetch(
+                `${this.baseUrl}/_apis/projects/${encodeURIComponent(project.name)}/teams?api-version=7.0`,
+                { headers: this.headers }
+              );
+              if (teamsResponse.ok) {
+                const teamsData = await teamsResponse.json();
+                const teams: { name: string }[] = teamsData.value || [];
+                if (teams.length > 0) {
+                  teamName = teams[0].name;
+                }
+              }
+            } catch {
+              // Fall back to project name as team name
+            }
+
+            const response = await fetch(
+              `${this.baseUrl}/${encodeURIComponent(project.name)}/${encodeURIComponent(teamName)}/_apis/work/teamsettings/iterations?$timeframe=current&api-version=7.0`,
+              { headers: this.headers }
+            );
+            if (!response.ok) return null;
+            const data = await response.json();
+            const iterations = data.value || [];
+            if (iterations.length > 0) {
+              return { project: project.name, path: iterations[0].path as string };
+            }
+            return null;
+          } catch {
+            return null;
+          }
+        })
+      );
+
+      for (const r of iterationResults) {
+        if (r.status === 'fulfilled' && r.value) {
+          result.set(r.value.project, r.value.path);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to fetch current iterations:', error);
+    }
+
+    return result;
+  }
+
+  // Kanban / Standup: fetch work items across all projects for a given date.
+  // Uses org-level WIQL queries (no project scope) for performance.
+  async getStandupData(
+    targetDate: Date,
+    stateCategories: Record<string, string>
+  ): Promise<{ items: DevOpsWorkItem[] }> {
+    // Recently-done window: 7 days ending on the target date (inclusive).
+    // This matches the "recently-solved" view elsewhere in the app and ensures
+    // items moved to a done state today still appear in the Closed column on
+    // the Kanban board (issue #317).
+    // The upper bound (< nextDay) anchors the window to targetDate so historical
+    // ?date=... requests don't pick up items changed after that date.
+    // Subtract 6 (not 7) so [windowStart, nextDay) covers exactly 7 calendar
+    // days inclusive of the target day — otherwise the date-only truncation
+    // would give us 8 days.
+    const windowStart = new Date(targetDate);
+    windowStart.setDate(windowStart.getDate() - 6);
+    const sevenDaysAgoStr = windowStart.toISOString().split('T')[0];
+    const nextDay = new Date(targetDate);
+    nextDay.setDate(nextDay.getDate() + 1);
+    const nextDayStr = nextDay.toISOString().split('T')[0];
+
+    // Build state lists dynamically from categories
+    const doneStates: string[] = [];
+    const activeStates: string[] = [];
+    for (const [state, category] of Object.entries(stateCategories)) {
+      if (category === 'Resolved' || category === 'Completed' || category === 'Removed') {
+        doneStates.push(state);
+      } else {
+        activeStates.push(state);
+      }
+    }
+
+    if (doneStates.length === 0 || activeStates.length === 0) {
+      return { items: [] };
+    }
+
+    const escapeState = (s: string) => s.replace(/'/g, "''");
+    const doneStatesList = doneStates.map((s) => `'${escapeState(s)}'`).join(', ');
+    const activeStatesList = activeStates.map((s) => `'${escapeState(s)}'`).join(', ');
+
+    // Only show actionable work item types (exclude Epic, Feature, User Story)
+    const allowedTypes = ['Task', 'Bug', 'Enhancement', 'Question', 'Issue', 'Risk'];
+    const allowedTypesList = allowedTypes.map((t) => `'${t}'`).join(', ');
+
+    const fields = [
+      'System.Id',
+      'System.Title',
+      'System.State',
+      'System.WorkItemType',
+      'System.AssignedTo',
+      'System.ChangedDate',
+      'System.CreatedDate',
+      'System.TeamProject',
+      'System.Tags',
+      'Microsoft.VSTS.Common.Priority',
+    ].join(', ');
+
+    // Query 1: Items currently in a done state, moved there in the last 7 days
+    const doneQuery = {
+      query: `
+        SELECT ${fields}
+        FROM WorkItems
+        WHERE [System.State] IN (${doneStatesList})
+          AND [System.WorkItemType] IN (${allowedTypesList})
+          AND [System.ChangedDate] >= '${sevenDaysAgoStr}'
+          AND [System.ChangedDate] < '${nextDayStr}'
+        ORDER BY [System.TeamProject] ASC, [System.ChangedDate] DESC
+      `,
+    };
+
+    // Query 2: Active items (not completed), touched in last 90 days
+    const ninetyDaysAgo = new Date(targetDate);
+    ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+    const ninetyDaysAgoStr = ninetyDaysAgo.toISOString().split('T')[0];
+
+    const activeQuery = {
+      query: `
+        SELECT ${fields}
+        FROM WorkItems
+        WHERE [System.State] IN (${activeStatesList})
+          AND [System.WorkItemType] IN (${allowedTypesList})
+          AND [System.ChangedDate] >= '${ninetyDaysAgoStr}'
+        ORDER BY [System.TeamProject] ASC, [System.ChangedDate] DESC
+      `,
+    };
+
+    // Execute both WIQL queries in parallel at org level
+    const [doneResponse, activeResponse] = await Promise.all([
+      fetch(`${this.baseUrl}/_apis/wit/wiql?api-version=7.0`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify(doneQuery),
+      }),
+      fetch(`${this.baseUrl}/_apis/wit/wiql?api-version=7.0`, {
+        method: 'POST',
+        headers: this.headers,
+        body: JSON.stringify(activeQuery),
+      }),
+    ]);
+
+    if (!doneResponse.ok) {
+      throw new Error(`Standup done query failed: ${doneResponse.statusText}`);
+    }
+    if (!activeResponse.ok) {
+      throw new Error(`Standup active query failed: ${activeResponse.statusText}`);
+    }
+
+    const doneData = await doneResponse.json();
+    const activeData = await activeResponse.json();
+
+    // Combine IDs and batch-fetch in one pass — saves a round-trip when the
+    // total fits in a single 200-item batch (the common case).
+    const doneIds: number[] = doneData.workItems?.map((wi: { id: number }) => wi.id) || [];
+    const activeIds: number[] = activeData.workItems?.map((wi: { id: number }) => wi.id) || [];
+    const items = await this.fetchWorkItemBatch([...doneIds, ...activeIds]);
+
+    return { items };
+  }
+
+  // Fetch work item details in batches of 200
+  private async fetchWorkItemBatch(workItemIds: number[]): Promise<DevOpsWorkItem[]> {
+    if (workItemIds.length === 0) return [];
+
+    const batchSize = 200;
+    const allWorkItems: DevOpsWorkItem[] = [];
+    const fields = [
+      'System.Title',
+      'System.State',
+      'System.WorkItemType',
+      'System.AssignedTo',
+      'System.ChangedDate',
+      'System.CreatedDate',
+      'System.TeamProject',
+      'System.Tags',
+      'System.IterationPath',
+      'Microsoft.VSTS.Common.Priority',
+      'Microsoft.VSTS.Scheduling.RemainingWork',
+    ].join(',');
+
+    for (let i = 0; i < workItemIds.length; i += batchSize) {
+      const batch = workItemIds.slice(i, i + batchSize);
+      const response = await fetch(
+        `${this.baseUrl}/_apis/wit/workitems?ids=${batch.join(',')}&fields=${fields}&api-version=7.0`,
+        { headers: this.headers }
+      );
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch work items batch: ${response.statusText}`);
+      }
+
+      const data = await response.json();
+      allWorkItems.push(...data.value);
+    }
+
+    return allWorkItems;
   }
 
   // Git API Methods
@@ -1344,4 +2956,83 @@ export async function getProjectFromEmail(email: string): Promise<string | undef
 // Clear cache (useful for testing or when project descriptions change)
 export function clearDomainMapCache(): void {
   domainMapCache = null;
+}
+
+// SLA Level Map - Maps project names to SLA levels
+// Reads from project descriptions in format: "SLA: Gold" or "sla=silver"
+
+interface SLAMapCache {
+  map: Record<string, SLALevel>;
+  timestamp: number;
+}
+
+let slaMapCache: SLAMapCache | null = null;
+
+// Fetch SLA map from DevOps project descriptions
+// SLA levels should be configured in each Azure DevOps project's description
+// using format: "SLA: Gold" or "sla=silver" or "SLA Level: Bronze"
+// Projects without SLA configured will use DEFAULT_SLA_LEVEL (Bronze)
+async function fetchSLAMapFromDevOps(): Promise<Record<string, SLALevel>> {
+  const pat = process.env.AZURE_DEVOPS_PAT;
+  const org = process.env.AZURE_DEVOPS_ORG || 'KnowAll';
+
+  if (!pat) {
+    console.warn('AZURE_DEVOPS_PAT not set, SLA levels will use defaults');
+    return {};
+  }
+
+  try {
+    const response = await fetch(
+      `https://dev.azure.com/${org}/_apis/projects?api-version=7.0&$expand=description`,
+      {
+        headers: {
+          Authorization: `Basic ${Buffer.from(':' + pat).toString('base64')}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch projects: ${response.statusText}`);
+    }
+
+    const data = await response.json();
+    const slaMap: Record<string, SLALevel> = {};
+
+    for (const project of data.value || []) {
+      const slaLevel = parseSLAFromDescription(project.description || '');
+      if (slaLevel) {
+        slaMap[project.name] = slaLevel;
+      }
+    }
+
+    return slaMap;
+  } catch (error) {
+    console.error('Failed to fetch SLA map from DevOps:', error);
+    return {};
+  }
+}
+
+// Get SLA map with caching
+export async function getProjectSLAMap(): Promise<Record<string, SLALevel>> {
+  const now = Date.now();
+
+  if (slaMapCache && now - slaMapCache.timestamp < CACHE_TTL_MS) {
+    return slaMapCache.map;
+  }
+
+  const map = await fetchSLAMapFromDevOps();
+  slaMapCache = { map, timestamp: now };
+  return map;
+}
+
+// Get SLA level for a specific project
+export async function getSLALevelForProject(projectName: string): Promise<SLALevel> {
+  const slaMap = await getProjectSLAMap();
+  return slaMap[projectName] || DEFAULT_SLA_LEVEL;
+}
+
+// Clear SLA cache (useful for testing or when project descriptions change)
+export function clearSLAMapCache(): void {
+  slaMapCache = null;
 }

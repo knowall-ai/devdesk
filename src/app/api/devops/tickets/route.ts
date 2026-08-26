@@ -3,10 +3,29 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { validateOrganizationAccess } from '@/lib/devops-auth';
 import { AzureDevOpsService, workItemToTicket, setStateCategoryCache } from '@/lib/devops';
+import { TICKET_WORK_ITEM_TYPES } from '@/types';
 import type { Ticket, TicketStatus } from '@/types';
 
-// Fetch work item states and build state-to-category mapping
+// TTL cache for state categories (avoids refetching on every request)
+let stateCategoryCacheData: {
+  categories: Record<string, string>;
+  timestamp: number;
+  org: string;
+} | null = null;
+const STATE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+// Fetch work item states and build state-to-category mapping (cached + parallelized)
 async function fetchAndCacheStateCategories(accessToken: string, organization: string) {
+  // Return cached data if fresh and same org
+  if (
+    stateCategoryCacheData &&
+    stateCategoryCacheData.org === organization &&
+    Date.now() - stateCategoryCacheData.timestamp < STATE_CACHE_TTL_MS
+  ) {
+    setStateCategoryCache(stateCategoryCacheData.categories);
+    return;
+  }
+
   try {
     // Get first project
     const projectsResponse = await fetch(
@@ -28,8 +47,9 @@ async function fetchAndCacheStateCategories(accessToken: string, organization: s
     const stateCategories: Record<string, string> = {};
     const workItemTypes = ['Bug', 'Task', 'Enhancement', 'Issue'];
 
-    for (const witType of workItemTypes) {
-      try {
+    // Fetch all work item type states in parallel
+    const results = await Promise.allSettled(
+      workItemTypes.map(async (witType) => {
         const statesResponse = await fetch(
           `https://dev.azure.com/${organization}/${encodeURIComponent(firstProject)}/_apis/wit/workitemtypes/${encodeURIComponent(witType)}/states?api-version=7.0`,
           {
@@ -40,17 +60,25 @@ async function fetchAndCacheStateCategories(accessToken: string, organization: s
           }
         );
 
-        if (statesResponse.ok) {
-          const statesData = await statesResponse.json();
-          for (const state of statesData.value || []) {
-            stateCategories[state.name] = state.category;
-          }
+        if (!statesResponse.ok) return [];
+        const statesData = await statesResponse.json();
+        return (statesData.value || []) as { name: string; category: string }[];
+      })
+    );
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        for (const state of result.value) {
+          stateCategories[state.name] = state.category;
         }
-      } catch {
-        // Continue if one work item type fails
       }
     }
 
+    stateCategoryCacheData = {
+      categories: stateCategories,
+      timestamp: Date.now(),
+      org: organization,
+    };
     setStateCategoryCache(stateCategories);
   } catch (error) {
     console.error('Failed to fetch state categories:', error);
@@ -66,7 +94,21 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    const { project, title, description, priority, assignee, tags } = body;
+    const {
+      project,
+      title,
+      description,
+      priority,
+      priorityFieldRef,
+      assignee,
+      tags,
+      workItemType,
+      iterationPath,
+      areaPath,
+      additionalFields,
+      parentId,
+      asTicket,
+    } = body;
 
     if (!project || !title) {
       return NextResponse.json({ error: 'Project and title are required' }, { status: 400 });
@@ -89,16 +131,90 @@ export async function POST(request: NextRequest) {
 
     const devopsService = new AzureDevOpsService(session.accessToken, organization);
 
-    // Create the ticket with 'ticket' tag always included
-    const allTags = ['ticket', ...(tags || [])].filter(Boolean);
+    // Validate priorityFieldRef to prevent arbitrary field injection
+    const allowedPriorityFields = [
+      'Microsoft.VSTS.Common.Priority',
+      'Custom.PriorityLevel',
+      'Microsoft.VSTS.CMMI.Priority',
+    ];
+    const validatedFieldRef =
+      priorityFieldRef && allowedPriorityFields.some((f) => priorityFieldRef.startsWith(f))
+        ? priorityFieldRef
+        : undefined;
+
+    // Validate additionalFields: only allow known DevOps field prefixes
+    // and deny core System.* fields that are set by the handler itself
+    const ALLOWED_FIELD_PREFIXES = ['Microsoft.VSTS.', 'Custom.'];
+    const DENIED_FIELDS = new Set([
+      'System.Title',
+      'System.Description',
+      'System.Tags',
+      'System.AssignedTo',
+      'System.State',
+      'System.AreaPath',
+      'System.IterationPath',
+      'System.WorkItemType',
+    ]);
+    let validatedAdditionalFields: Record<string, string | number> | undefined;
+    if (additionalFields && typeof additionalFields === 'object') {
+      validatedAdditionalFields = {};
+      for (const [key, value] of Object.entries(additionalFields)) {
+        const isAllowedPrefix = ALLOWED_FIELD_PREFIXES.some((prefix) => key.startsWith(prefix));
+        const hasPathTraversal = /[/\\]/.test(key);
+        if (
+          isAllowedPrefix &&
+          !DENIED_FIELDS.has(key) &&
+          !hasPathTraversal &&
+          (typeof value === 'string' || typeof value === 'number')
+        ) {
+          validatedAdditionalFields[key] = value;
+        }
+      }
+    }
+
+    // Validate parentId — must be a positive integer to avoid arbitrary URL injection
+    const validatedParentId =
+      typeof parentId === 'number' && Number.isInteger(parentId) && parentId > 0
+        ? parentId
+        : undefined;
+
+    // Auto-tag with 'ticket' unless the caller explicitly opts out (asTicket: false).
+    // Defaulting to true preserves existing behaviour for any caller that omits
+    // the field — only the Kanban Board flow currently sets it false (issue #372).
+    // Sanitize the user-supplied list to strings first; a malformed request with
+    // non-string entries would otherwise throw on .toLowerCase().
+    const tagAsTicket = asTicket !== false;
+    const userTags = (Array.isArray(tags) ? tags : [])
+      .filter((t): t is string => typeof t === 'string')
+      .map((t) => t.trim())
+      .filter(Boolean);
+    // Reject semicolons — DevOps uses ';' as the tag delimiter, so a single
+    // user-supplied tag containing ';' would silently split into multiple
+    // tags on the way through. Matches the PATCH handler.
+    if (userTags.some((t) => t.includes(';'))) {
+      return NextResponse.json({ error: 'Tags cannot contain semicolons' }, { status: 400 });
+    }
+    // Drop any case-variant of "ticket" from user input first so the dedup is
+    // case-insensitive — Set() with exact-string equality wouldn't catch
+    // "Ticket" vs "ticket" and we'd end up with both.
+    const userTagsNoTicket = userTags.filter((t) => t.toLowerCase() !== 'ticket');
+    const allTags = tagAsTicket ? ['ticket', ...userTagsNoTicket] : userTagsNoTicket;
     const workItem = await devopsService.createTicketWithAssignee(
       project,
       title,
       description || '',
-      session.user?.email || 'unknown',
-      priority || 3,
-      allTags,
-      assignee
+      {
+        priority,
+        tags: allTags,
+        assigneeId: assignee,
+        workItemType: workItemType || 'Task',
+        hasPriority: Boolean(validatedFieldRef),
+        priorityFieldRef: validatedFieldRef,
+        additionalFields: validatedAdditionalFields,
+        iterationPath: typeof iterationPath === 'string' ? iterationPath : undefined,
+        areaPath: typeof areaPath === 'string' ? areaPath : undefined,
+        parentId: validatedParentId,
+      }
     );
 
     const ticket = workItemToTicket(workItem);
@@ -144,7 +260,7 @@ export async function GET(request: NextRequest) {
     await fetchAndCacheStateCategories(session.accessToken, organization);
 
     const devopsService = new AzureDevOpsService(session.accessToken, organization);
-    const tickets = await devopsService.getAllTickets(ticketsOnly);
+    const tickets = await devopsService.getAllTickets(ticketsOnly, TICKET_WORK_ITEM_TYPES);
 
     // Filter tickets based on view
     const filteredTickets = filterTicketsByView(tickets, view, session.user?.email);
@@ -160,13 +276,15 @@ export async function GET(request: NextRequest) {
 }
 
 function filterTicketsByView(tickets: Ticket[], view: string, userEmail?: string | null): Ticket[] {
-  const activeStatuses: TicketStatus[] = ['New', 'Open', 'In Progress', 'Pending'];
+  const activeStatuses: TicketStatus[] = ['New', 'Open', 'In Progress'];
+  const currentUserEmail = userEmail?.toLowerCase();
 
   switch (view) {
     case 'your-active':
     case 'your-unsolved':
       return tickets.filter(
-        (t) => activeStatuses.includes(t.status) && t.assignee?.email === userEmail
+        (t) =>
+          activeStatuses.includes(t.status) && t.assignee?.email?.toLowerCase() === currentUserEmail
       );
 
     case 'unassigned':

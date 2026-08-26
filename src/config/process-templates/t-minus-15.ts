@@ -13,7 +13,7 @@ export const tMinus15Config: ProcessTemplateConfig = {
 
   workItemTypes: {
     // Ticket types - must be tagged with "ticket" to appear in ZapDesk
-    ticketTypes: ['Task', 'Bug', 'Enhancement', 'Issue'],
+    ticketTypes: ['Task', 'Bug', 'Enhancement', 'Issue', 'Risk', 'Question'],
     defaultTicketType: 'Task',
 
     // Feature and Epic types for hierarchy
@@ -29,6 +29,11 @@ export const tMinus15Config: ProcessTemplateConfig = {
       3: 'Normal',
       4: 'Low',
     },
+    resolutionTypes: ['Bug', 'Enhancement', 'Task'],
+    resolutionFieldOverrides: {
+      Task: 'Custom.TaskResolution',
+    },
+    mitigationTypes: ['Issue', 'Risk'],
   },
 
   states: {

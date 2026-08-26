@@ -1,27 +1,44 @@
 'use client';
 
 import { useSession } from 'next-auth/react';
-import { useRouter, useParams } from 'next/navigation';
+import { useRouter, useParams, usePathname } from 'next/navigation';
 import { useEffect, useState, useCallback } from 'react';
+import { toast } from 'sonner';
 import { MainLayout } from '@/components/layout';
 import { LoadingSpinner } from '@/components/common';
 import { TicketDetail } from '@/components/tickets';
-import type { Ticket, TicketComment } from '@/types';
+import { useOrganization } from '@/components/providers/OrganizationProvider';
+import { hasTicketTag } from '@/lib/tags';
+import type { Ticket, TicketComment, Attachment, WorkItemUpdate } from '@/types';
 
 export default function TicketDetailPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const params = useParams();
+  const pathname = usePathname();
   const ticketId = params.id as string;
+  const { selectedOrganization } = useOrganization();
 
   const [ticket, setTicket] = useState<Ticket | null>(null);
   const [comments, setComments] = useState<TicketComment[]>([]);
+  const [history, setHistory] = useState<WorkItemUpdate[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  // Helper to build headers with org
+  const orgHeaders = useCallback(
+    (extra?: Record<string, string>) => ({
+      ...(selectedOrganization && { 'x-devops-org': selectedOrganization.accountName }),
+      ...extra,
+    }),
+    [selectedOrganization]
+  );
 
   // Reset state when navigating to a different ticket
   useEffect(() => {
     setTicket(null);
     setComments([]);
+    setHistory([]);
     setLoading(true);
   }, [ticketId]);
 
@@ -32,11 +49,33 @@ export default function TicketDetailPage() {
   }, [status, router]);
 
   const fetchTicket = useCallback(async () => {
+    if (!selectedOrganization) return;
     setLoading(true);
+    // Track whether we kicked off a route-replace so the finally block knows
+    // not to flip loading off — otherwise we render `null` (blank page) for
+    // a beat until the new route mounts.
+    let isRedirecting = false;
     try {
-      const response = await fetch(`/api/devops/tickets/${ticketId}`);
+      const response = await fetch(`/api/devops/tickets/${ticketId}`, {
+        headers: orgHeaders(),
+      });
       if (response.ok) {
         const data = await response.json();
+        // Issue #372: route ticket vs internal work item to the URL that
+        // matches its identity, so the sidebar highlight reflects reality.
+        const isTicket = hasTicketTag(data.ticket.tags);
+        const onTicketsRoute = pathname?.startsWith('/tickets/');
+        const onWorkItemsRoute = pathname?.startsWith('/workitems/');
+        if (isTicket && onWorkItemsRoute) {
+          isRedirecting = true;
+          router.replace(`/tickets/${ticketId}`);
+          return;
+        }
+        if (!isTicket && onTicketsRoute) {
+          isRedirecting = true;
+          router.replace(`/workitems/${ticketId}`);
+          return;
+        }
         setTicket({
           ...data.ticket,
           createdAt: new Date(data.ticket.createdAt),
@@ -54,35 +93,84 @@ export default function TicketDetailPage() {
             )
         );
       } else {
-        router.push('/tickets');
+        isRedirecting = true;
+        // Send users back to a sensible list for whichever route they were on
+        // — Kanban Board is the natural home for internal work items.
+        router.push(pathname?.startsWith('/workitems/') ? '/kanban' : '/tickets');
       }
     } catch (error) {
       console.error('Failed to fetch ticket:', error);
-      router.push('/tickets');
+      isRedirecting = true;
+      router.push(pathname?.startsWith('/workitems/') ? '/kanban' : '/tickets');
     } finally {
-      setLoading(false);
+      if (!isRedirecting) setLoading(false);
     }
-  }, [ticketId, router]);
+  }, [ticketId, router, selectedOrganization, orgHeaders, pathname]);
+
+  const fetchHistory = useCallback(async () => {
+    setHistoryLoading(true);
+    try {
+      const response = await fetch(`/api/devops/tickets/${ticketId}/history`);
+      if (response.ok) {
+        const data = await response.json();
+        setHistory(
+          (data.updates || []).map((u: WorkItemUpdate & { revisedDate: string }) => ({
+            ...u,
+            revisedDate: new Date(u.revisedDate),
+          }))
+        );
+      }
+    } catch (error) {
+      console.error('Failed to fetch ticket history:', error);
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [ticketId]);
 
   useEffect(() => {
-    if (session?.accessToken && ticketId) {
+    if (session?.accessToken && ticketId && selectedOrganization) {
       fetchTicket();
+      fetchHistory();
     }
-  }, [session, ticketId, fetchTicket]);
+  }, [session, ticketId, fetchTicket, fetchHistory, selectedOrganization]);
+
+  // Re-verify ticket exists when user tabs back (e.g., after deleting in DevOps)
+  useEffect(() => {
+    if (!ticket || !selectedOrganization) return;
+
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const response = await fetch(`/api/devops/tickets/${ticketId}/exists`, {
+          headers: orgHeaders(),
+        });
+        if (response.status === 404) {
+          router.push('/tickets');
+        }
+        // Ignore other errors (auth, throttling, 5xx) — don't redirect on transient failures
+      } catch {
+        // Network error — don't redirect on transient failures
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [ticket, selectedOrganization, ticketId, orgHeaders, router]);
 
   const handleAddComment = async (comment: string) => {
     try {
       const response = await fetch(`/api/devops/tickets/${ticketId}/comments`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: orgHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ comment }),
       });
-
-      if (response.ok) {
-        await fetchTicket(); // Refresh comments
-      }
+      if (!response.ok) throw new Error('Failed to add comment');
+      await fetchTicket();
+      toast.success('Comment added');
     } catch (error) {
       console.error('Failed to add comment:', error);
+      toast.error('Failed to add comment');
+      throw error;
     }
   };
 
@@ -90,15 +178,16 @@ export default function TicketDetailPage() {
     try {
       const response = await fetch(`/api/devops/tickets/${ticketId}/state`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: orgHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ state: newState }),
       });
-
-      if (response.ok) {
-        await fetchTicket(); // Refresh ticket
-      }
+      if (!response.ok) throw new Error('Failed to update state');
+      await fetchTicket();
+      toast.success(`Status updated to "${newState}"`);
     } catch (error) {
       console.error('Failed to update state:', error);
+      toast.error('Failed to update status');
+      throw error;
     }
   };
 
@@ -107,18 +196,19 @@ export default function TicketDetailPage() {
     try {
       const response = await fetch(`/api/devops/tickets/${ticketId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: orgHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           assignee: assigneeId,
           project: ticket.project,
         }),
       });
-
-      if (response.ok) {
-        await fetchTicket(); // Refresh ticket
-      }
+      if (!response.ok) throw new Error('Failed to update assignee');
+      await fetchTicket();
+      toast.success('Assignee updated');
     } catch (error) {
       console.error('Failed to update assignee:', error);
+      toast.error('Failed to update assignee');
+      throw error;
     }
   };
 
@@ -127,19 +217,167 @@ export default function TicketDetailPage() {
     try {
       const response = await fetch(`/api/devops/tickets/${ticketId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: orgHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           priority,
           project: ticket.project,
         }),
       });
-
-      if (response.ok) {
-        await fetchTicket(); // Refresh ticket
-      }
+      if (!response.ok) throw new Error('Failed to update priority');
+      await fetchTicket();
+      toast.success('Priority updated');
     } catch (error) {
       console.error('Failed to update priority:', error);
+      toast.error('Failed to update priority');
+      throw error;
     }
+  };
+
+  const handleTypeChange = async (newType: string, additionalFields?: Record<string, string>) => {
+    if (!ticket) return;
+    try {
+      const response = await fetch(`/api/devops/tickets/${ticketId}/type`, {
+        method: 'PATCH',
+        headers: orgHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ type: newType, project: ticket.project, additionalFields }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || data.message || 'Failed to change work item type');
+      }
+      await fetchTicket();
+      toast.success(`Type changed to "${newType}"`);
+    } catch (error) {
+      console.error('Failed to change work item type:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to change work item type');
+      throw error;
+    }
+  };
+
+  const handleDescriptionChange = async (description: string) => {
+    if (!ticket) return;
+    try {
+      const response = await fetch(`/api/devops/tickets/${ticketId}`, {
+        method: 'PATCH',
+        headers: orgHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          description,
+          project: ticket.project,
+        }),
+      });
+      if (!response.ok) throw new Error('Failed to update description');
+      await fetchTicket();
+      toast.success('Description updated');
+    } catch (error) {
+      console.error('Failed to update description:', error);
+      toast.error('Failed to update description');
+      throw error;
+    }
+  };
+
+  const handleTagsChange = async (tags: string[]) => {
+    if (!ticket) return;
+    try {
+      const response = await fetch(`/api/devops/tickets/${ticketId}`, {
+        method: 'PATCH',
+        headers: orgHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ tags, project: ticket.project }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to update tags');
+      }
+      await fetchTicket();
+      toast.success('Tags updated');
+    } catch (error) {
+      console.error('Failed to update tags:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to update tags');
+      throw error;
+    }
+  };
+
+  const handleResolutionChange = async (resolution: string) => {
+    if (!ticket) return;
+    try {
+      const response = await fetch(`/api/devops/tickets/${ticketId}`, {
+        method: 'PATCH',
+        headers: orgHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          resolution,
+          project: ticket.project,
+          workItemType: ticket.workItemType,
+        }),
+      });
+      if (!response.ok) throw new Error('Failed to update resolution');
+      await fetchTicket();
+      toast.success('Resolution updated');
+    } catch (error) {
+      console.error('Failed to update resolution:', error);
+      toast.error('Failed to update resolution');
+      throw error;
+    }
+  };
+
+  const handleMitigationChange = async (mitigation: string) => {
+    if (!ticket) return;
+    try {
+      const response = await fetch(`/api/devops/tickets/${ticketId}`, {
+        method: 'PATCH',
+        headers: orgHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({
+          mitigation,
+          project: ticket.project,
+          workItemType: ticket.workItemType,
+        }),
+      });
+      if (!response.ok) throw new Error('Failed to update mitigation');
+      await fetchTicket();
+      toast.success('Mitigation updated');
+    } catch (error) {
+      console.error('Failed to update mitigation:', error);
+      toast.error('Failed to update mitigation');
+      throw error;
+    }
+  };
+
+  // Delete (Recycle Bin) — issue #374. Confirmation is rendered by TicketDetail.
+  // Errors are surfaced via toast here; do not rethrow — the caller invokes
+  // this from an onClick handler that React doesn't await, so a rejection
+  // would land as an unhandled promise rejection in the browser console.
+  const handleDelete = async () => {
+    if (!ticket) return;
+    try {
+      const response = await fetch(`/api/devops/tickets/${ticketId}`, {
+        method: 'DELETE',
+        headers: orgHeaders(),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Failed to delete');
+      }
+      toast.success(`Deleted #${ticketId}`);
+      router.push('/tickets');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to delete');
+    }
+  };
+
+  const handleUploadAttachment = async (file: File): Promise<Attachment> => {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`/api/devops/tickets/${ticketId}/attachments`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const data = await response.json();
+      throw new Error(data.error || 'Failed to upload attachment');
+    }
+
+    const data = await response.json();
+    return data.attachment;
   };
 
   if (status === 'loading' || loading) {
@@ -162,10 +400,20 @@ export default function TicketDetailPage() {
         key={ticketId}
         ticket={ticket}
         comments={comments}
+        history={history}
+        historyLoading={historyLoading}
         onAddComment={handleAddComment}
         onStateChange={handleStateChange}
         onAssigneeChange={handleAssigneeChange}
         onPriorityChange={handlePriorityChange}
+        onTypeChange={handleTypeChange}
+        onTagsChange={handleTagsChange}
+        onDescriptionChange={handleDescriptionChange}
+        onResolutionChange={handleResolutionChange}
+        onMitigationChange={handleMitigationChange}
+        onUploadAttachment={handleUploadAttachment}
+        onRefreshTicket={fetchTicket}
+        onDelete={handleDelete}
       />
     </MainLayout>
   );
