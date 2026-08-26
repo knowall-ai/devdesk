@@ -290,15 +290,17 @@ export default function WorkItemBoard({
     try {
       await action.handler(itemIds);
       setSelectedItems(new Set());
-      // Bulk actions move items between states or reassign them, so every
-      // sidebar count can change (#404). Coalesced to one recount.
-      refreshCounts();
       onRefresh?.();
     } catch (error) {
       console.error(`Bulk action ${action.id} failed:`, error);
       alert(`Failed to ${action.label.toLowerCase()}. Please try again.`);
     } finally {
       setBulkActionLoading(false);
+      // In the finally, not the success path: a bulk handler throws if *any*
+      // request failed, but the ones that succeeded have already moved between
+      // states or been reassigned, so the counts are stale either way (#404).
+      // Coalesced to a single recount.
+      refreshCounts();
     }
   };
 
