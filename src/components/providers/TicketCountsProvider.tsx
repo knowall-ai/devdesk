@@ -63,7 +63,10 @@ interface Props {
 export default function TicketCountsProvider({ children }: Props) {
   const { data: session } = useSession();
   const { selectedOrganization } = useOrganization();
-  const [counts, setCounts] = useState<TicketCounts | undefined>();
+  // The counts are stored with the organisation they were computed for.
+  // Without that, switching organisations kept showing the previous one's
+  // numbers until the new request landed — and indefinitely if it failed.
+  const [result, setResult] = useState<{ org: string; counts: TicketCounts } | undefined>();
   const [isLoading, setIsLoading] = useState(false);
 
   // Monotonic id so a slow earlier response cannot overwrite a newer one —
@@ -93,7 +96,7 @@ export default function TicketCountsProvider({ children }: Props) {
       });
       if (!response.ok) return;
       const data = await response.json();
-      if (requestId === requestIdRef.current) setCounts(data);
+      if (requestId === requestIdRef.current) setResult({ org: accountName, counts: data });
     } catch (error) {
       // An abort is us cancelling, not a failure worth reporting.
       if ((error as Error | undefined)?.name === 'AbortError') return;
@@ -136,6 +139,10 @@ export default function TicketCountsProvider({ children }: Props) {
       abortRef.current?.abort();
     };
   }, [schedule]);
+
+  // Never hand back another organisation's numbers. An empty sidebar during
+  // the switch is honest; the previous organisation's counts are not.
+  const counts = result && result.org === accountName ? result.counts : undefined;
 
   const value = useMemo(() => ({ counts, isLoading, refresh }), [counts, isLoading, refresh]);
 
