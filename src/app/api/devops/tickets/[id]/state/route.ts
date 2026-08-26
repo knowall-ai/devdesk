@@ -9,6 +9,8 @@ import { debugLog } from '@/lib/debug';
 const MAX_WORK_ITEM_ID = 2_147_483_647;
 /** Generous bound on a process-template state name. */
 const MAX_STATE_LENGTH = 128;
+/** Azure DevOps caps project names at 64 characters. */
+const MAX_PROJECT_LENGTH = 64;
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -65,7 +67,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     if (project !== undefined && typeof project !== 'string') {
       return NextResponse.json({ error: 'project must be a string' }, { status: 400 });
     }
-    const projectHint = typeof project === 'string' && project.trim() ? project : undefined;
+    // Trim before use: the value goes into the DevOps URL, and " Team A "
+    // and "Team A" are not the same project identifier upstream.
+    const trimmedProject = typeof project === 'string' ? project.trim() : '';
+    if (trimmedProject.length > MAX_PROJECT_LENGTH) {
+      return NextResponse.json({ error: 'project is too long' }, { status: 400 });
+    }
+    const projectHint = trimmedProject || undefined;
 
     const organization = request.headers.get('x-devops-org') || undefined;
     const devopsService = new AzureDevOpsService(session.accessToken, organization);
