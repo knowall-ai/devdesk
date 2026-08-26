@@ -1324,12 +1324,14 @@ export class AzureDevOpsService {
             // only hand the client a short plain-text snippet: markup
             // carries no usable reason and can echo infrastructure detail
             // back to every authenticated caller.
+            const excerpt = body.slice(0, 2000);
             console.error('[devops.updateTicketState] non-JSON error body', {
               projectName,
               workItemId,
               state,
               status: response.status,
-              body,
+              bodyLength: body.length,
+              body: excerpt + (body.length > excerpt.length ? '… [truncated]' : ''),
             });
             const text = body.replace(/\s+/g, ' ').trim();
             if (text && !/[<>]/.test(text)) detail = text.slice(0, 200);
