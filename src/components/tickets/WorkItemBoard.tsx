@@ -23,6 +23,7 @@ import {
 import type { Ticket, WorkItem, WorkItemType } from '@/types';
 import { TICKET_WORK_ITEM_TYPES } from '@/types';
 import { useClickOutside } from '@/hooks/useClickOutside';
+import { useTicketCounts } from '@/components/providers/TicketCountsProvider';
 import StatusBadge from '../common/StatusBadge';
 import Avatar from '../common/Avatar';
 import KanbanBoard from './KanbanBoard';
@@ -254,6 +255,7 @@ export default function WorkItemBoard({
   const [showBulkMenu, setShowBulkMenu] = useState(false);
   const [showGroupByMenu, setShowGroupByMenu] = useState(false);
   const [bulkActionLoading, setBulkActionLoading] = useState(false);
+  const { refresh: refreshCounts } = useTicketCounts();
   const bulkMenuRef = useRef<HTMLDivElement>(null);
   const groupByMenuRef = useClickOutside<HTMLDivElement>(
     () => setShowGroupByMenu(false),
@@ -288,6 +290,9 @@ export default function WorkItemBoard({
     try {
       await action.handler(itemIds);
       setSelectedItems(new Set());
+      // Bulk actions move items between states or reassign them, so every
+      // sidebar count can change (#404). Coalesced to one recount.
+      refreshCounts();
       onRefresh?.();
     } catch (error) {
       console.error(`Bulk action ${action.id} failed:`, error);
