@@ -170,6 +170,11 @@ export interface Ticket {
   attachments?: Attachment[];
   // Customer's response on a Question work item (Custom.CustomerResponse)
   customerResponse?: string;
+  // Effort hours from Microsoft.VSTS.Scheduling.*. Undefined when the field has
+  // never been set on the work item, which DevOps reports by omitting it.
+  completedWork?: number;
+  remainingWork?: number;
+  originalEstimate?: number;
 }
 
 export interface TicketComment {
@@ -567,6 +572,20 @@ export interface StandupData {
   projects: ProjectStandupData[];
   /** Column definitions in display order (from DevOps state categories) */
   columns: { name: string; category: string }[];
+  /**
+   * Project -> work item type -> the DevOps state names that type defines in
+   * that project. States come from the project's process template and are
+   * defined per work item type, so a display column valid for one card can be
+   * invalid for another; the board uses this to disable impossible drop
+   * targets. Keyed by project so a state that exists only in some other
+   * project's template can't unblock a column the card can't actually enter.
+   *
+   * A successful response always carries this, though it may be `{}` or be
+   * missing an entry for a given project or type when discovery came back
+   * empty for it. Treat any missing entry as "allow everything" and let the
+   * server decide — total discovery failure is a 500, not an omission here.
+   */
+  allowedStatesByProjectType?: Record<string, Record<string, string[]>>;
   summary: {
     columnCounts: Record<string, number>;
     projectCount: number;
