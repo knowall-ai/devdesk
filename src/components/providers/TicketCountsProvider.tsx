@@ -63,10 +63,8 @@ interface Props {
 export default function TicketCountsProvider({ children }: Props) {
   const { data: session } = useSession();
   const { selectedOrganization } = useOrganization();
-  // The counts are stored with the organisation they were computed for.
-  // Without that, switching organisations kept showing the previous one's
-  // numbers until the new request landed — and indefinitely if it failed.
-  const [result, setResult] = useState<{ org: string; counts: TicketCounts } | undefined>();
+  // Counts are stored with the scope they were computed for — see `scopeKey`.
+  const [result, setResult] = useState<{ scope: string; counts: TicketCounts } | undefined>();
   const [isLoading, setIsLoading] = useState(false);
 
   // Monotonic id so a slow earlier response cannot overwrite a newer one —
@@ -77,9 +75,22 @@ export default function TicketCountsProvider({ children }: Props) {
 
   const accessToken = session?.accessToken;
   const accountName = selectedOrganization?.accountName;
+  const userEmail = session?.user?.email;
+
+  /**
+   * Who and where these counts belong to.
+   *
+   * Counts are per user *and* per organisation, and the cached value outlives
+   * a change to either: switching organisations kept the previous one's
+   * numbers on screen, and signing out left the previous user's there. Both
+   * persisted indefinitely if the replacement request failed. Null whenever we
+   * have no business showing anything.
+   */
+  const scopeKey = accessToken && accountName && userEmail ? `${userEmail}::${accountName}` : null;
 
   const fetchCounts = useCallback(async () => {
-    if (!accessToken || !accountName) return;
+    if (!accessToken || !accountName || !scopeKey) return;
+    const scope = scopeKey;
 
     // Only one recount is ever useful; drop anything still in flight.
     abortRef.current?.abort();
@@ -96,7 +107,7 @@ export default function TicketCountsProvider({ children }: Props) {
       });
       if (!response.ok) return;
       const data = await response.json();
-      if (requestId === requestIdRef.current) setResult({ org: accountName, counts: data });
+      if (requestId === requestIdRef.current && scope) setResult({ scope, counts: data });
     } catch (error) {
       // An abort is us cancelling, not a failure worth reporting.
       if ((error as Error | undefined)?.name === 'AbortError') return;
@@ -107,7 +118,7 @@ export default function TicketCountsProvider({ children }: Props) {
       clearTimeout(timeout);
       if (requestId === requestIdRef.current) setIsLoading(false);
     }
-  }, [accessToken, accountName]);
+  }, [accessToken, accountName, scopeKey]);
 
   /**
    * Single scheduling path for both the initial load and every invalidation.
@@ -140,9 +151,10 @@ export default function TicketCountsProvider({ children }: Props) {
     };
   }, [schedule]);
 
-  // Never hand back another organisation's numbers. An empty sidebar during
-  // the switch is honest; the previous organisation's counts are not.
-  const counts = result && result.org === accountName ? result.counts : undefined;
+  // Never hand back another user's or another organisation's numbers. An
+  // empty sidebar during the transition is honest; stale counts from a
+  // different scope are not.
+  const counts = result && scopeKey && result.scope === scopeKey ? result.counts : undefined;
 
   const value = useMemo(() => ({ counts, isLoading, refresh }), [counts, isLoading, refresh]);
 
