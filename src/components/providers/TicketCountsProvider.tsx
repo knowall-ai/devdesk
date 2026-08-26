@@ -90,13 +90,36 @@ export default function TicketCountsProvider({ children }: Props) {
    * persisted indefinitely if the replacement request failed. Null whenever we
    * have no business showing anything.
    *
-   * Note what this deliberately does *not* gate on: a missing identity falls
-   * back to a placeholder rather than blocking the fetch. Scoping is a
-   * correctness guard, and turning it into a precondition would mean an
-   * account without an id or an email silently got no counts at all — trading
-   * a narrow staleness window for a blank sidebar.
+   * A missing identity deliberately does not block the fetch — scoping is a
+   * correctness guard, not a precondition, and an account with neither an id
+   * nor an email would otherwise get no counts at all. The placeholder that
+   * stands in for it cannot distinguish two such accounts on its own, so the
+   * effect below clears the cache whenever the access token changes, which a
+   * change of user always implies.
    */
   const scopeKey = accessToken && accountName ? `${identity}::${accountName}` : null;
+
+  /**
+   * Drop cached counts when the session itself changes.
+   *
+   * The scope key falls back to a placeholder for accounts with no id and no
+   * email, and two of those in one organisation would otherwise share a key
+   * and see each other's numbers. A different user always means a different
+   * access token, so this closes that case without making the identity a
+   * precondition for fetching at all.
+   *
+   * A token refresh for the same user also lands here and briefly empties the
+   * sidebar. That is the right trade: the effect below refetches immediately,
+   * and a blank count for a moment beats another account's count for any time
+   * at all.
+   */
+  const lastTokenRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (lastTokenRef.current !== undefined && lastTokenRef.current !== accessToken) {
+      setResult(undefined);
+    }
+    lastTokenRef.current = accessToken;
+  }, [accessToken]);
 
   const fetchCounts = useCallback(async () => {
     if (!accessToken || !accountName || !scopeKey) return;
