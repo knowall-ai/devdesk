@@ -10,6 +10,7 @@ import {
   hasResolutionField,
 } from '@/config/process-templates';
 import { hasTicketTag } from '@/lib/tags';
+import { rewriteAttachmentUrls } from '@/lib/attachment-utils';
 import Avatar from '../common/Avatar';
 import CommentSection from './CommentSection';
 import ZapDialog from './ZapDialog';
@@ -135,7 +136,7 @@ function ResolutionField({
         <div
           className="prose prose-sm prose-invert user-content max-w-none"
           style={{ color: 'var(--text-secondary)' }}
-          dangerouslySetInnerHTML={{ __html: workItem.resolution }}
+          dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(workItem.resolution) }}
         />
       ) : (
         <button
@@ -408,7 +409,9 @@ export default function WorkItemDetailContent({
                 className="prose prose-sm prose-invert user-content max-w-none"
                 style={{ color: 'var(--text-secondary)' }}
                 dangerouslySetInnerHTML={{
-                  __html: workItem.description || '<em>No description provided</em>',
+                  __html: workItem.description
+                    ? rewriteAttachmentUrls(workItem.description)
+                    : '<em>No description provided</em>',
                 }}
               />
             </div>
@@ -433,7 +436,7 @@ export default function WorkItemDetailContent({
             <div
               className="prose prose-sm prose-invert user-content max-w-none"
               style={{ color: 'var(--text-secondary)' }}
-              dangerouslySetInnerHTML={{ __html: workItem.description }}
+              dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(workItem.description) }}
             />
           ) : (
             <p className="text-sm italic" style={{ color: 'var(--text-muted)' }}>
@@ -452,7 +455,7 @@ export default function WorkItemDetailContent({
           <div
             className="prose prose-sm prose-invert user-content max-w-none"
             style={{ color: 'var(--text-secondary)' }}
-            dangerouslySetInnerHTML={{ __html: workItem.customerResponse }}
+            dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(workItem.customerResponse) }}
           />
         </div>
       )}

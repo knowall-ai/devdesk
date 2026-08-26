@@ -35,7 +35,12 @@ import type {
 import { ALLOWED_ATTACHMENT_TYPES } from '@/types';
 import { ensureActiveState } from '@/types';
 import { highlightMentions } from '@/lib/mentions';
-import { formatFileSize, validateFile } from '@/lib/attachment-utils';
+import {
+  formatFileSize,
+  validateFile,
+  rewriteAttachmentUrls,
+  buildAttachmentProxyUrl,
+} from '@/lib/attachment-utils';
 import { hasTicketTag } from '@/lib/tags';
 import StatusBadge from '../common/StatusBadge';
 import Avatar from '../common/Avatar';
@@ -483,9 +488,11 @@ export default function TicketDetail({
 
   const handleCancelEditDescription = () => {
     setIsEditingDescription(false);
-    // Reset content back to original
+    // Reset content back to original. Use the rewritten form: we are returning to
+    // the read-only view, and React skips the innerHTML update when the rewrite is
+    // a no-op (a description with no DevOps attachments).
     if (descriptionRef.current) {
-      descriptionRef.current.innerHTML = ticket.description || '';
+      descriptionRef.current.innerHTML = rewriteAttachmentUrls(ticket.description);
     }
   };
 
@@ -553,12 +560,8 @@ export default function TicketDetail({
         const orgMatch = attachment.url?.match(/dev\.azure\.com\/([^/]+)/);
         const attachmentId = idMatch ? idMatch[1] : null;
         const org = orgMatch ? orgMatch[1] : '';
-        const params = new URLSearchParams({
-          fileName: file.name,
-          ...(org && { org }),
-        });
         const imgSrc = attachmentId
-          ? `/api/devops/attachments/${attachmentId}?${params.toString()}`
+          ? buildAttachmentProxyUrl(attachmentId, file.name, org)
           : attachment.url;
         const imgHtml = `<img src="${imgSrc}" alt="${file.name}" />`;
         setNewComment((prev) => (prev ? `${prev}\n${imgHtml}` : imgHtml));
@@ -919,7 +922,14 @@ export default function TicketDetail({
                       : {}),
                   }}
                   dangerouslySetInnerHTML={{
-                    __html: ticket.description || '',
+                    // While editing, the DOM is the source of truth for the save
+                    // (handleSaveDescription reads innerHTML back), so it must hold the
+                    // original DevOps URLs — otherwise an unrelated edit would persist
+                    // our relative /api/devops/attachments/... proxy URLs to DevOps,
+                    // where they are meaningless. Rewrite only for read-only display.
+                    __html: isEditingDescription
+                      ? ticket.description || ''
+                      : rewriteAttachmentUrls(ticket.description),
                   }}
                 />
               ) : (
@@ -939,7 +949,7 @@ export default function TicketDetail({
                   <div
                     className="prose prose-sm prose-invert user-content max-w-none"
                     style={{ color: 'var(--text-secondary)' }}
-                    dangerouslySetInnerHTML={{ __html: ticket.systemInfo }}
+                    dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(ticket.systemInfo) }}
                   />
                 </div>
               )}
@@ -957,7 +967,7 @@ export default function TicketDetail({
                 <div
                   className="prose prose-sm prose-invert user-content max-w-none"
                   style={{ color: 'var(--text-secondary)' }}
-                  dangerouslySetInnerHTML={{ __html: ticket.reproSteps }}
+                  dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(ticket.reproSteps) }}
                 />
               </div>
             )}
@@ -1021,7 +1031,7 @@ export default function TicketDetail({
                   <div
                     className="prose prose-sm prose-invert user-content max-w-none"
                     style={{ color: 'var(--text-secondary)' }}
-                    dangerouslySetInnerHTML={{ __html: ticket.resolution }}
+                    dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(ticket.resolution) }}
                   />
                 ) : (
                   <button
@@ -1222,7 +1232,7 @@ export default function TicketDetail({
                             className="user-content text-sm"
                             style={{ color: 'var(--text-secondary)' }}
                             dangerouslySetInnerHTML={{
-                              __html: highlightMentions(comment.content),
+                              __html: highlightMentions(rewriteAttachmentUrls(comment.content)),
                             }}
                           />
                         </div>
