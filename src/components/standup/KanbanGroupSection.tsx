@@ -247,9 +247,12 @@ export default function KanbanGroupSection({
       const activeItemId = active.id as number;
       const targetCol = findColumn(activeItemId);
       if (!targetCol) {
+        // Not gated: the dragged card is in no column at all, which means our
+        // local state and the columns disagree. That is a real fault, not a
+        // user action, and it is rare enough not to be per-drag noise.
+        console.warn('[Standup DnD] dropped item is in no column', { activeItemId });
         // handleDragOver may already have moved the card in localItems, so
         // bail out through the same rollback every other early return uses.
-        debugWarn('[Standup DnD] dropped item is in no column', { activeItemId });
         syncFromProps();
         return;
       }
@@ -272,6 +275,10 @@ export default function KanbanGroupSection({
         )
       ) {
         syncFromProps();
+        // Gated, unlike the fault above: a blocked drop is an ordinary,
+        // expected outcome — the column is already disabled as a drop target
+        // and the user gets a toast — so logging it every time is exactly the
+        // per-drag noise this PR set out to remove.
         debugWarn('[Standup DnD] drop blocked by the type’s state list', {
           itemId: activeItemId,
           workItemType: dragged.workItemType,
