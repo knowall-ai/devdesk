@@ -324,6 +324,14 @@ async function getFirstResponseTimeMs(
       if (requesterEmail && authorEmail === requesterEmail) continue;
 
       const responseTimeMs = comment.createdAt.getTime() - ticket.createdAt.getTime();
+      // A reply can't predate the ticket. When it appears to — clock skew
+      // between DevOps hosts, or a work item imported with a back-dated
+      // created date — the figure is meaningless, and a negative would drag
+      // the member's average down silently. Skip to the next comment rather
+      // than counting it. Zero is kept: a same-millisecond reply is a real,
+      // if very fast, response.
+      if (responseTimeMs < 0) continue;
+
       const assigneeEmail = ticket.assignee?.email?.toLowerCase();
       if (!assigneeEmail) return null;
 
