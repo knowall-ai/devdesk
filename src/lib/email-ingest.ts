@@ -350,11 +350,26 @@ class AzureDevOpsServiceWithPAT {
   }
 }
 
+/**
+ * An attachment that could not be uploaded.
+ *
+ * `hasFallbackLink` records whether *this* attachment also produced a
+ * reference link. The appendix used to work that out by matching filenames
+ * against the link list, which quietly broke on the most common case there is:
+ * two attachments named `image001.png`, where a link belonging to one hid the
+ * failure of the other.
+ */
+export interface UploadFailure {
+  filename: string;
+  error: unknown;
+  hasFallbackLink: boolean;
+}
+
 interface UploadGroup {
   uploaded: UploadedAttachment[];
   referenceLinks: Array<{ filename: string; url: string }>;
   itemNotes: Array<{ subject: string }>;
-  failures: Array<{ filename: string; error: unknown }>;
+  failures: UploadFailure[];
 }
 
 async function uploadAttachmentBlobs(
@@ -384,6 +399,7 @@ async function uploadAttachmentBlobs(
         out.failures.push({
           filename: a.filename,
           error: 'No project resolved for upload',
+          hasFallbackLink: Boolean(a.referenceUrl),
         });
         continue;
       }
@@ -402,7 +418,11 @@ async function uploadAttachmentBlobs(
       } catch (err) {
         const idTag = workItemIdForLogging ? ` ticket #${workItemIdForLogging}` : '';
         console.error(`[Ingest] upload failed for ${a.filename}${idTag}:`, err);
-        out.failures.push({ filename: a.filename, error: err });
+        out.failures.push({
+          filename: a.filename,
+          error: err,
+          hasFallbackLink: Boolean(a.referenceUrl),
+        });
         if (a.referenceUrl) {
           out.referenceLinks.push({ filename: a.filename, url: a.referenceUrl });
         }
@@ -484,7 +504,7 @@ export function buildAppendixHtml(
   uploaded: UploadedAttachment[],
   referenceLinks: Array<{ filename: string; url: string }>,
   itemNotes: Array<{ subject: string }>,
-  failures: Array<{ filename: string; error: unknown }>,
+  failures: UploadFailure[],
   splicedCids: Set<string>
 ): string {
   const parts: string[] = [];
@@ -531,7 +551,7 @@ export function buildAppendixHtml(
   // customer's email and nothing in the ticket has no way to tell whether the
   // customer forgot or ZapDesk dropped them — and the file is not linked to
   // the work item either, so there is nowhere else to look.
-  const unattached = failures.filter((f) => !referenceLinks.some((r) => r.filename === f.filename));
+  const unattached = failures.filter((f) => !f.hasFallbackLink);
   if (unattached.length) {
     const items = unattached.map((f) => `<li>${escapeHtml(f.filename)}</li>`).join('');
     parts.push(
@@ -564,7 +584,7 @@ function formatEmailBody(
   uploaded: UploadedAttachment[],
   referenceLinks: Array<{ filename: string; url: string }>,
   itemNotes: Array<{ subject: string }>,
-  failures: Array<{ filename: string; error: unknown }>
+  failures: UploadFailure[]
 ): string {
   const renderedBody = renderEmailBodyForStorage(email, uploaded);
   const appendix = buildAppendixHtml(

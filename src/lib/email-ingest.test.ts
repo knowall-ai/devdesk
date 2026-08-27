@@ -11,6 +11,12 @@ const inline = (filename: string, contentId?: string) => ({
 
 const none = new Set<string>();
 
+const fail = (filename: string, hasFallbackLink = false) => ({
+  filename,
+  error: 'no project',
+  hasFallbackLink,
+});
+
 describe('splicedInlineCids', () => {
   const email = (body: string, bodyType: 'html' | 'text'): IngestableEmail => ({
     from: 'someone@example.com',
@@ -58,13 +64,7 @@ describe('buildAppendixHtml', () => {
   it('names attachments that could not be added', () => {
     // Silence here is the worst outcome: the agent sees the customer mention
     // an attachment and finds nothing, with no way to tell whose fault it is.
-    const out = buildAppendixHtml(
-      [],
-      [],
-      [],
-      [{ filename: 'report.pdf', error: 'no project' }],
-      none
-    );
+    const out = buildAppendixHtml([], [], [], [fail('report.pdf')], none);
     expect(out).toContain('could not be added');
     expect(out).toContain('report.pdf');
   });
@@ -74,21 +74,29 @@ describe('buildAppendixHtml', () => {
       [],
       [{ filename: 'big.zip', url: 'https://sharepoint/big.zip' }],
       [],
-      [{ filename: 'big.zip', error: 'no project' }],
+      [fail('big.zip', true)],
       none
     );
     expect(out).toContain('Cloud attachments');
     expect(out).not.toContain('could not be added');
   });
 
-  it('escapes filenames rather than trusting them', () => {
+  it('reports a failure even when another attachment shares its filename', () => {
+    // Outlook names every pasted screenshot image001.png. Matching failures to
+    // links by filename let one attachment's link hide another's failure.
     const out = buildAppendixHtml(
       [],
+      [{ filename: 'image001.png', url: 'https://sharepoint/image001.png' }],
       [],
-      [],
-      [{ filename: '<img src=x onerror=1>', error: 'x' }],
+      [fail('image001.png', true), fail('image001.png', false)],
       none
     );
+    expect(out).toContain('could not be added');
+    expect(out).toContain('image001.png');
+  });
+
+  it('escapes filenames rather than trusting them', () => {
+    const out = buildAppendixHtml([], [], [], [fail('<img src=x onerror=1>')], none);
     expect(out).not.toContain('<img src=x');
   });
 
