@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { AzureDevOpsService, workItemToTicket } from '@/lib/devops';
+import { AzureDevOpsService, DevOpsApiError, workItemToTicket } from '@/lib/devops';
 import { requireAnyPermission, requirePermission, isAuthed } from '@/lib/api-auth';
 
 type RouteParams = { params: Promise<{ id: string }> };
@@ -17,7 +17,8 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
       return NextResponse.json({ error: 'Invalid ticket ID' }, { status: 400 });
     }
 
-    const devopsService = new AzureDevOpsService(session.accessToken!);
+    const organization = request.headers.get('x-devops-org') || undefined;
+    const devopsService = new AzureDevOpsService(session.accessToken!, organization);
     const found = await devopsService.findProjectForWorkItem(ticketId);
 
     if (!found) {
@@ -47,6 +48,64 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
   }
 }
 
+// DELETE moves the work item to the DevOps Recycle Bin (reversible).
+// Pass ?destroy=true to permanently destroy it. DevOps enforces its own
+// authorization on top of this, based on the user's role and PAT scope.
+//
+// This is the ZapDesk-side gate main's comment said was still owed. It is a
+// separate permission from tickets:edit and admin-only: an agent editing and
+// closing tickets is routine, removing one from the org is not — and this
+// route can destroy a work item permanently.
+export async function DELETE(request: NextRequest, { params }: RouteParams) {
+  try {
+    const auth = await requirePermission('tickets:delete');
+    if (!isAuthed(auth)) return auth;
+    const { session } = auth;
+
+    const { id } = await params;
+    const ticketId = parseInt(id, 10);
+
+    if (isNaN(ticketId) || ticketId <= 0) {
+      return NextResponse.json({ error: 'Invalid ticket ID' }, { status: 400 });
+    }
+
+    const destroy = request.nextUrl.searchParams.get('destroy') === 'true';
+    const organization = request.headers.get('x-devops-org') || undefined;
+    const devopsService = new AzureDevOpsService(session.accessToken!, organization);
+
+    try {
+      await devopsService.deleteWorkItem(ticketId, destroy);
+    } catch (err) {
+      // Map structured upstream failures to clean client-facing statuses
+      if (err instanceof DevOpsApiError) {
+        if (err.status === 401) {
+          return NextResponse.json(
+            { error: 'Unauthorized to delete this work item' },
+            { status: 401 }
+          );
+        }
+        if (err.status === 403) {
+          return NextResponse.json(
+            { error: 'You do not have permission to delete this work item in DevOps' },
+            { status: 403 }
+          );
+        }
+        if (err.status === 404) {
+          return NextResponse.json({ error: 'Work item not found' }, { status: 404 });
+        }
+      }
+      throw err;
+    }
+
+    return NextResponse.json({ success: true, id: ticketId, destroyed: destroy });
+  } catch (error) {
+    // Log full detail server-side; return a generic message so the client
+    // toast doesn't echo upstream / internal error text.
+    console.error('Error deleting ticket:', error);
+    return NextResponse.json({ error: 'Failed to delete ticket' }, { status: 500 });
+  }
+}
+
 export async function PATCH(request: NextRequest, { params }: RouteParams) {
   try {
     const auth = await requirePermission('tickets:edit');
@@ -61,18 +120,56 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     }
 
     const body = await request.json();
-    const { assignee, priority, project } = body;
+    const {
+      assignee,
+      assignToMe,
+      priority,
+      project,
+      title,
+      description,
+      tags,
+      resolution,
+      mitigation,
+      workItemType,
+    } = body;
 
-    if (!project) {
-      return NextResponse.json({ error: 'Project name is required' }, { status: 400 });
+    const organization = request.headers.get('x-devops-org') || undefined;
+    const devopsService = new AzureDevOpsService(session.accessToken!, organization);
+
+    // If no project provided, find it by searching all projects
+    let projectName = project;
+    if (!projectName) {
+      const found = await devopsService.findProjectForWorkItem(ticketId);
+      if (!found) {
+        return NextResponse.json({ error: 'Ticket not found' }, { status: 404 });
+      }
+      projectName = found.project.name;
     }
 
-    const devopsService = new AzureDevOpsService(session.accessToken!);
-
+    // main hoisted this declaration above the project lookup; a second one
+    // here would shadow it.
     // Build updates object
-    const updates: { assignee?: string | null; priority?: number } = {};
+    const updates: {
+      assignee?: string | null;
+      priority?: number;
+      title?: string;
+      description?: string;
+      tags?: string[];
+      resolution?: string;
+      mitigation?: string;
+      workItemType?: string;
+    } = {};
 
-    if (assignee !== undefined) {
+    if (workItemType) {
+      updates.workItemType = workItemType;
+    }
+
+    if (assignToMe) {
+      // Use the Azure DevOps profile API to get the authenticated user's identity
+      // Format as "Display Name <email>" to avoid ambiguous identity errors
+      const profile = await devopsService.getUserProfile();
+      updates.assignee = `${profile.displayName} <${profile.emailAddress}>`;
+    } else if (assignee !== undefined) {
       updates.assignee = assignee; // Can be null to unassign
     }
 
@@ -80,13 +177,46 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
       updates.priority = priority;
     }
 
+    if (title !== undefined) {
+      updates.title = title;
+    }
+
+    if (description !== undefined) {
+      updates.description = description;
+    }
+
+    if (tags !== undefined && Array.isArray(tags)) {
+      // Validate each element is a string
+      if (!tags.every((t: unknown) => typeof t === 'string')) {
+        return NextResponse.json({ error: 'All tags must be strings' }, { status: 400 });
+      }
+      // Reject tags containing semicolons (DevOps delimiter)
+      const cleanTags = (tags as string[]).map((t) => t.trim()).filter(Boolean);
+      if (cleanTags.some((t) => t.includes(';'))) {
+        return NextResponse.json({ error: 'Tags cannot contain semicolons' }, { status: 400 });
+      }
+      // Ensure "ticket" tag is always preserved
+      if (!cleanTags.some((t) => t.toLowerCase() === 'ticket')) {
+        cleanTags.unshift('ticket');
+      }
+      updates.tags = cleanTags;
+    }
+
+    if (resolution !== undefined) {
+      updates.resolution = resolution;
+    }
+
+    if (mitigation !== undefined) {
+      updates.mitigation = mitigation;
+    }
+
     // Update the work item
-    const updatedWorkItem = await devopsService.updateTicketFields(project, ticketId, updates);
+    const updatedWorkItem = await devopsService.updateTicketFields(projectName, ticketId, updates);
 
     const ticket = workItemToTicket(updatedWorkItem, {
-      id: project,
-      name: project,
-      devOpsProject: project,
+      id: projectName,
+      name: projectName,
+      devOpsProject: projectName,
       devOpsOrg: 'KnowAll',
       tags: [],
       createdAt: new Date(),
@@ -95,10 +225,8 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 
     return NextResponse.json({ ticket });
   } catch (error) {
-    console.error('Error updating ticket:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to update ticket' },
-      { status: 500 }
-    );
+    const message = error instanceof Error ? error.message : 'Failed to update ticket';
+    console.error('Error updating ticket:', message);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }

@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { Toaster } from 'sonner';
 import SessionProvider from '@/components/providers/SessionProvider';
 import OrganizationProvider from '@/components/providers/OrganizationProvider';
 import PermissionProvider from '@/components/providers/PermissionProvider';
@@ -78,6 +79,7 @@ export default function RootLayout({
             <OrganizationProvider>{children}</OrganizationProvider>
           </PermissionProvider>
         </SessionProvider>
+        <Toaster theme="dark" position="bottom-right" richColors closeButton />
       </body>
     </html>
   );

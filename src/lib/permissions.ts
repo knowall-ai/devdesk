@@ -30,6 +30,7 @@ const DEFAULT_ROLES: RoleDefinition[] = [
       'tickets:assign',
       'tickets:change_status',
       'tickets:create_internal_notes',
+      'tickets:delete',
       'team:view',
       'users:view',
       'projects:view',
@@ -113,24 +114,36 @@ export function resolveUserPermissions(email: string, userId?: string): SessionP
   const roleDef = config.roles.find((r) => r.name === role);
   const basePermissions = roleDef?.permissions ?? [];
 
-  // Apply overrides
+  return { role, permissions: mergePermissions(basePermissions, override) };
+}
+
+/**
+ * Combine a role's permissions with a user's per-user grants and revocations.
+ *
+ * Revocation is applied last and therefore wins: a permission both granted and
+ * revoked for the same user ends up denied. That is the safe direction for a
+ * contradictory config, and it is a rule worth pinning down rather than
+ * leaving to the order the statements happen to appear in.
+ *
+ * Split out from `resolveUserPermissions` so it can be tested without a
+ * permissions file on disk.
+ */
+export function mergePermissions(
+  basePermissions: Permission[],
+  override?: Pick<UserPermissionOverride, 'permissions' | 'revokedPermissions'>
+): Permission[] {
   let permissions = [...basePermissions];
 
-  if (override?.permissions) {
-    // Add extra permissions
-    for (const p of override.permissions) {
-      if (!permissions.includes(p)) {
-        permissions.push(p);
-      }
-    }
+  for (const p of override?.permissions ?? []) {
+    if (!permissions.includes(p)) permissions.push(p);
   }
 
-  if (override?.revokedPermissions) {
-    // Remove revoked permissions
-    permissions = permissions.filter((p) => !override.revokedPermissions!.includes(p));
+  const revoked = override?.revokedPermissions;
+  if (revoked?.length) {
+    permissions = permissions.filter((p) => !revoked.includes(p));
   }
 
-  return { role, permissions };
+  return permissions;
 }
 
 export function hasPermission(

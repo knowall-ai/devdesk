@@ -18,6 +18,7 @@ import {
   AlertCircle,
   CheckCircle,
   CalendarCheck,
+  ClipboardList,
   PlusCircle,
   X,
 } from 'lucide-react';
@@ -71,6 +72,12 @@ const allNavItems: NavItem[] = [
     icon: <Activity size={20} />,
     href: '/reporting',
     permission: 'reporting:view',
+  },
+  {
+    id: 'kanban',
+    name: 'Kanban Board',
+    icon: <ClipboardList size={20} />,
+    href: '/kanban',
   },
   {
     id: 'monthly-checkpoint',
