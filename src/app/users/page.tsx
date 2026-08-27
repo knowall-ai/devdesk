@@ -2,9 +2,10 @@
 
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { MainLayout } from '@/components/layout';
-import { Avatar, LoadingSpinner } from '@/components/common';
+import { Avatar, LoadingSpinner, AccessDenied } from '@/components/common';
+import { usePermissions } from '@/components/providers/PermissionProvider';
 import { Search, Plus, Upload, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
 import { format } from 'date-fns';
@@ -13,6 +14,11 @@ import type { Customer } from '@/types';
 export default function UsersPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
+  const { hasPermission } = usePermissions();
+  // Hoisted so the data effects below can check it too. Rendering AccessDenied
+  // while still firing the requests behind it wastes a DevOps round trip per
+  // page load and fills the console with 403s that describe nothing wrong.
+  const canViewUsers = hasPermission('users:view');
   const [users, setUsers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -26,13 +32,7 @@ export default function UsersPage() {
     }
   }, [status, router]);
 
-  useEffect(() => {
-    if (session?.accessToken) {
-      fetchUsers();
-    }
-  }, [session]);
-
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
       const response = await fetch('/api/devops/users');
       if (response.ok) {
@@ -49,7 +49,13 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (canViewUsers && session?.accessToken) {
+      fetchUsers();
+    }
+  }, [canViewUsers, session?.accessToken, fetchUsers]);
 
   // Get unique email domains for filter dropdown
   const emailDomains = Array.from(
@@ -87,6 +93,14 @@ export default function UsersPage() {
 
   if (!session) {
     return null;
+  }
+
+  if (!canViewUsers) {
+    return (
+      <MainLayout>
+        <AccessDenied message="You do not have permission to view the Users page." />
+      </MainLayout>
+    );
   }
 
   return (

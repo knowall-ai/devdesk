@@ -1,16 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth';
 import { AzureDevOpsService, DevOpsApiError, workItemToTicket } from '@/lib/devops';
+import { requirePermission, isAuthed } from '@/lib/api-auth';
 import { isEmailTicket, extractRequesterEmail, sendStatusChangeNotification } from '@/lib/email';
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
-    const session = await getServerSession(authOptions);
-
-    if (!session?.accessToken) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-    }
+    const auth = await requirePermission('tickets:change_status');
+    if (!isAuthed(auth)) return auth;
+    const { session } = auth;
 
     const { id } = await params;
     const ticketId = parseInt(id, 10);
@@ -27,7 +24,7 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
 
     const organization = request.headers.get('x-devops-org') || undefined;
-    const devopsService = new AzureDevOpsService(session.accessToken, organization);
+    const devopsService = new AzureDevOpsService(session.accessToken!, organization);
 
     // If project is provided in the body, use it directly
     if (body.project) {
