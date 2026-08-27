@@ -433,7 +433,13 @@ function StandupPageContent() {
   const handleDialogAssigneeChange = useCallback(
     async (workItemId: number, assigneeId: string | null) => {
       const project = selectedTicket?.id === workItemId ? selectedTicket.project : undefined;
-      await patchTicket(workItemId, { assignee: assigneeId, project });
+      try {
+        await patchTicket(workItemId, { assignee: assigneeId, project });
+        toast.success(assigneeId ? 'Assignee updated' : 'Assignee cleared');
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to update assignee');
+        throw err;
+      }
     },
     [patchTicket, selectedTicket]
   );
@@ -441,7 +447,13 @@ function StandupPageContent() {
   const handleDialogPriorityChange = useCallback(
     async (workItemId: number, priority: number) => {
       const project = selectedTicket?.id === workItemId ? selectedTicket.project : undefined;
-      await patchTicket(workItemId, { priority, project });
+      try {
+        await patchTicket(workItemId, { priority, project });
+        toast.success('Priority updated');
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to update priority');
+        throw err;
+      }
     },
     [patchTicket, selectedTicket]
   );
@@ -449,9 +461,15 @@ function StandupPageContent() {
   const handleDialogTagsChange = useCallback(
     async (workItemId: number, tags: string[]) => {
       const project = selectedTicket?.id === workItemId ? selectedTicket.project : undefined;
-      await patchTicket(workItemId, { tags, project });
-      // Optimistic update for the tags field if the PATCH didn't return the ticket
-      setSelectedTicket((prev) => (prev && prev.id === workItemId ? { ...prev, tags } : prev));
+      try {
+        await patchTicket(workItemId, { tags, project });
+        // Optimistic update for the tags field if the PATCH didn't return the ticket
+        setSelectedTicket((prev) => (prev && prev.id === workItemId ? { ...prev, tags } : prev));
+        toast.success('Tags updated');
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Failed to update tags');
+        throw err;
+      }
     },
     [patchTicket, selectedTicket]
   );
