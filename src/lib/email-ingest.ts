@@ -19,6 +19,16 @@ import {
 
 const TICKET_REF_REGEX = /\[ZapDesk #(\d+)\]/;
 
+/**
+ * Deadline on every DevOps call made while ingesting an email.
+ *
+ * Ingestion runs unattended off the poller, so a request that never returns
+ * stalls the whole inbox rather than failing one message. Uploads get longer
+ * than the metadata calls because a large attachment is legitimately slow.
+ */
+const DEVOPS_TIMEOUT_MS = 30_000;
+const DEVOPS_UPLOAD_TIMEOUT_MS = 60_000;
+
 export interface IngestEmailAttachment {
   filename: string;
   contentType: string;
@@ -241,6 +251,7 @@ class AzureDevOpsServiceWithPAT {
         method: 'POST',
         headers: { ...this.headers, 'Content-Type': 'application/json-patch+json' },
         body: JSON.stringify(patchDocument),
+        signal: AbortSignal.timeout(DEVOPS_TIMEOUT_MS),
       }
     );
     if (!response.ok) {
@@ -258,6 +269,7 @@ class AzureDevOpsServiceWithPAT {
         method: 'PATCH',
         headers: { ...this.headers, 'Content-Type': 'application/json-patch+json' },
         body: JSON.stringify(patchDocument),
+        signal: AbortSignal.timeout(DEVOPS_TIMEOUT_MS),
       }
     );
     if (!response.ok) {
@@ -282,6 +294,7 @@ class AzureDevOpsServiceWithPAT {
           'Content-Type': 'application/octet-stream',
         },
         body: buffer,
+        signal: AbortSignal.timeout(DEVOPS_UPLOAD_TIMEOUT_MS),
       }
     );
     if (!uploadResponse.ok) {
@@ -312,6 +325,7 @@ class AzureDevOpsServiceWithPAT {
         method: 'PATCH',
         headers: { ...this.headers, 'Content-Type': 'application/json-patch+json' },
         body: JSON.stringify(patchDocument),
+        signal: AbortSignal.timeout(DEVOPS_TIMEOUT_MS),
       }
     );
     if (!linkResponse.ok) {
@@ -323,7 +337,7 @@ class AzureDevOpsServiceWithPAT {
   async getProjectForWorkItem(workItemId: number): Promise<string | null> {
     const res = await fetch(
       `${this.baseUrl}/_apis/wit/workitems/${workItemId}?fields=System.TeamProject&api-version=7.0`,
-      { headers: this.headers }
+      { headers: this.headers, signal: AbortSignal.timeout(DEVOPS_TIMEOUT_MS) }
     );
     if (!res.ok) {
       console.warn(
