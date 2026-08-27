@@ -9,8 +9,22 @@ const APP_URL = process.env.APP_URL || process.env.NEXTAUTH_URL || 'http://local
 // the app server (e.g. internal-only APP_URL). Default to assets shipped under
 // public/email/ so local dev works out of the box.
 const ZAPDESK_LOGO_URL = process.env.ZAPDESK_LOGO_URL || `${APP_URL}/email/zapdesk-logo.png`;
-const KNOWALL_LOGO_URL = process.env.KNOWALL_LOGO_URL || `${APP_URL}/email/knowall-logo.png`;
 const KNOWALL_URL = 'https://knowall.ai';
+
+/**
+ * The KnowAll AI logo is opt-in, and the footer falls back to a wordmark
+ * without it.
+ *
+ * There is no KnowAll logo asset in this repository — only the ZapDesk one —
+ * and a brand mark is not something to approximate. Defaulting the URL to a
+ * file that does not exist put an `<img>` into every outbound customer email
+ * pointing at nothing: a blank 120x30 gap where the asset is a transparent
+ * placeholder, and a broken-image icon if it 404s. A text wordmark is a better
+ * outcome than either.
+ *
+ * Set KNOWALL_LOGO_URL to a hosted copy of the real logo to turn the image on.
+ */
+const KNOWALL_LOGO_URL = process.env.KNOWALL_LOGO_URL || '';
 
 export function layoutWrapper(content: string): string {
   return `
@@ -52,9 +66,13 @@ export function layoutWrapper(content: string): string {
       ${content}
     </div>
     <div class="footer">
-      <a href="${KNOWALL_URL}" style="text-decoration: none;">
+      ${
+        KNOWALL_LOGO_URL
+          ? `<a href="${KNOWALL_URL}" style="text-decoration: none;">
         <img src="${KNOWALL_LOGO_URL}" width="120" height="30" alt="KnowAll AI" style="border: 0;" />
-      </a>
+      </a>`
+          : ''
+      }
       <p style="margin: 4px 0;">Powered by <a href="${KNOWALL_URL}">KnowAll AI</a></p>
       <p style="margin: 4px 0;">Please reply to this email to update your ticket.</p>
     </div>
