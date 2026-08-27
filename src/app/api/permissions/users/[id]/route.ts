@@ -4,6 +4,7 @@ import {
   setUserOverride,
   removeUserOverride,
   appendAuditLog,
+  readPermissionsConfig,
   isUserRole,
   parsePermissionList,
 } from '@/lib/permissions';
@@ -40,6 +41,17 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
     // out with nothing on screen to explain why.
     if (!isUserRole(body.role)) {
       return NextResponse.json({ error: 'role is not a known role' }, { status: 400 });
+    }
+
+    // Knowing the name is not enough. Roles are editable, so a name with no
+    // definition left in the config resolves to no permissions -- assigning it
+    // would lock the user out through the same screen meant to grant access.
+    const role = body.role;
+    if (!readPermissionsConfig().roles.some((r) => r.name === role)) {
+      return NextResponse.json(
+        { error: `role "${role}" has no definition in the current config` },
+        { status: 400 }
+      );
     }
 
     if (body.displayName !== undefined && typeof body.displayName !== 'string') {

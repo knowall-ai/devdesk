@@ -174,13 +174,61 @@ export function validatePermissionsConfig(value: unknown): PermissionsConfig | n
 }
 
 /**
- * A config with no role holding `admin:manage_roles` cannot be edited back
- * through the UI: the last administrator loses the screen that would undo it.
- * Recovering means hand-editing JSON on the server, so the write endpoint
- * refuses the change instead.
+ * Emails allowed to administer regardless of what the config file says.
+ *
+ * This is the answer to the bootstrap problem: on a machine with no
+ * `permissions.json`, the seeded config has `defaultRole: 'agent'` and no user
+ * overrides, so nobody can reach the admin endpoints to appoint the first
+ * administrator. It doubles as the way back in after a config edit that
+ * removes the last one.
+ *
+ * Kept in the environment rather than the file deliberately: it must not be
+ * editable through the screen it exists to recover.
  */
-export function hasManageableAdmin(config: PermissionsConfig): boolean {
-  return config.roles.some((r) => r.permissions.includes('admin:manage_roles'));
+export function bootstrapAdminEmails(raw = process.env.ZAPDESK_ADMIN_EMAILS): string[] {
+  return (raw ?? '')
+    .split(',')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+export function isBootstrapAdmin(email: string, raw = process.env.ZAPDESK_ADMIN_EMAILS): boolean {
+  if (!email.trim()) return false;
+  return bootstrapAdminEmails(raw).includes(email.trim().toLowerCase());
+}
+
+/**
+ * Can anyone still reach `admin:manage_roles` under this config?
+ *
+ * Not the same question as whether some role definition lists the permission:
+ * a role nobody holds is no use. An administrator is reachable when the
+ * default role can manage roles, or some user override resolves to a role
+ * that can, or an override grants the permission outright -- in each case
+ * only if that same override does not revoke it again.
+ *
+ * The write endpoint refuses a config that fails this, because it is the one
+ * edit that cannot be undone from the screen that made it. A bootstrap admin
+ * is a separate, deliberately out-of-band way back in.
+ */
+export function hasReachableAdmin(config: PermissionsConfig): boolean {
+  const managing = new Set(
+    config.roles.filter((r) => r.permissions.includes('admin:manage_roles')).map((r) => r.name)
+  );
+
+  const keepsIt = (u: UserPermissionOverride) =>
+    !(u.revokedPermissions ?? []).includes('admin:manage_roles');
+
+  if (managing.has(config.defaultRole)) {
+    // Someone with no override at all inherits it, unless every user is
+    // overridden -- which is not knowable here, and defaultRole users are the
+    // normal case.
+    return true;
+  }
+
+  return config.users.some(
+    (u) =>
+      keepsIt(u) && (managing.has(u.role) || (u.permissions ?? []).includes('admin:manage_roles'))
+  );
 }
 
 export function readPermissionsConfig(): PermissionsConfig {
@@ -226,7 +274,19 @@ export function resolveUserPermissions(email: string, userId?: string): SessionP
       'Permissions config is unusable - denying all permissions until it is repaired.',
       error
     );
+    if (isBootstrapAdmin(email)) {
+      const builtInAdmin = DEFAULT_ROLES.find((r) => r.name === 'admin');
+      return { role: 'admin', permissions: [...(builtInAdmin?.permissions ?? [])] };
+    }
     return { role: 'client', permissions: [] };
+  }
+
+  // Checked before the override lookup so it cannot be revoked by the config
+  // it exists to repair. Uses the built-in admin permission set rather than
+  // the file's, for the same reason.
+  if (isBootstrapAdmin(email)) {
+    const builtInAdmin = DEFAULT_ROLES.find((r) => r.name === 'admin');
+    return { role: 'admin', permissions: [...(builtInAdmin?.permissions ?? [])] };
   }
 
   // Find user override by email (case-insensitive) or userId

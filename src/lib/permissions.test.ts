@@ -8,9 +8,16 @@ import {
   parsePermissionList,
   parseRoleDefinitions,
   validatePermissionsConfig,
-  hasManageableAdmin,
+  hasReachableAdmin,
+  isBootstrapAdmin,
+  bootstrapAdminEmails,
 } from './permissions';
-import type { Permission, PermissionsConfig, SessionPermissions } from '@/types';
+import type {
+  Permission,
+  PermissionsConfig,
+  SessionPermissions,
+  UserPermissionOverride,
+} from '@/types';
 
 const session = (permissions: Permission[]): SessionPermissions => ({
   role: 'agent',
@@ -222,20 +229,94 @@ describe('validatePermissionsConfig', () => {
   });
 });
 
-describe('hasManageableAdmin', () => {
-  const withRoles = (permissions: Permission[]): PermissionsConfig => ({
+describe('hasReachableAdmin', () => {
+  const config = (over: Partial<PermissionsConfig> = {}): PermissionsConfig => ({
     defaultRole: 'agent',
-    roles: [{ name: 'agent', label: 'Agent', description: '', permissions }],
+    roles: [
+      { name: 'admin', label: 'Admin', description: '', permissions: ['admin:manage_roles'] },
+      { name: 'agent', label: 'Agent', description: '', permissions: ['tickets:view_all'] },
+    ],
     users: [],
+    ...over,
   });
 
-  it('is true while some role can still manage roles', () => {
-    expect(hasManageableAdmin(withRoles(['admin:manage_roles']))).toBe(true);
+  const user = (over: Partial<UserPermissionOverride> = {}): UserPermissionOverride => ({
+    userId: 'a@b.c',
+    email: 'a@b.c',
+    role: 'agent',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    updatedBy: 'test',
+    ...over,
   });
 
-  it('is false once nobody can', () => {
-    // This is the edit that cannot be undone from the admin screen: recovering
-    // means hand-editing JSON on the server.
-    expect(hasManageableAdmin(withRoles(['tickets:view_all']))).toBe(false);
+  it('is true when the default role can manage roles', () => {
+    expect(hasReachableAdmin(config({ defaultRole: 'admin' }))).toBe(true);
+  });
+
+  it('is true when a user override resolves to a managing role', () => {
+    expect(hasReachableAdmin(config({ users: [user({ role: 'admin' })] }))).toBe(true);
+  });
+
+  it('is true when an override grants the permission outright', () => {
+    expect(
+      hasReachableAdmin(config({ users: [user({ permissions: ['admin:manage_roles'] })] }))
+    ).toBe(true);
+  });
+
+  it('is false when nobody resolves to it, even though a role defines it', () => {
+    // The distinction that matters: an admin role nobody holds is no use.
+    expect(hasReachableAdmin(config())).toBe(false);
+  });
+
+  it('is false when the only administrator has the permission revoked', () => {
+    expect(
+      hasReachableAdmin(
+        config({ users: [user({ role: 'admin', revokedPermissions: ['admin:manage_roles'] })] })
+      )
+    ).toBe(false);
+  });
+
+  it('is false once no role defines it at all', () => {
+    // The edit that cannot be undone from the admin screen: recovering means
+    // hand-editing JSON on the server, or a bootstrap admin.
+    expect(
+      hasReachableAdmin(
+        config({
+          defaultRole: 'admin',
+          roles: [
+            { name: 'admin', label: 'Admin', description: '', permissions: ['admin:access'] },
+          ],
+        })
+      )
+    ).toBe(false);
+  });
+});
+
+describe('bootstrap administrators', () => {
+  it('parses a comma-separated list, trimming and lowercasing', () => {
+    expect(bootstrapAdminEmails(' A@B.c , d@e.f ')).toEqual(['a@b.c', 'd@e.f']);
+  });
+
+  it('ignores empty entries and an unset variable', () => {
+    expect(bootstrapAdminEmails('a@b.c,,')).toEqual(['a@b.c']);
+    expect(bootstrapAdminEmails(undefined)).toEqual([]);
+    expect(bootstrapAdminEmails('')).toEqual([]);
+  });
+
+  it('matches regardless of case or surrounding space', () => {
+    expect(isBootstrapAdmin('A@B.c', 'a@b.c')).toBe(true);
+    expect(isBootstrapAdmin(' a@b.c ', 'a@b.c')).toBe(true);
+  });
+
+  it('does not match anyone else', () => {
+    expect(isBootstrapAdmin('x@y.z', 'a@b.c')).toBe(false);
+  });
+
+  it('never matches an empty email, however the list is written', () => {
+    // An unauthenticated or malformed session must not fall into the admin
+    // escape hatch by matching a blank entry.
+    expect(isBootstrapAdmin('', 'a@b.c')).toBe(false);
+    expect(isBootstrapAdmin('   ', ',,')).toBe(false);
+    expect(isBootstrapAdmin('', '')).toBe(false);
   });
 });

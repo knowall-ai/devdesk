@@ -6,7 +6,7 @@ import {
   appendAuditLog,
   isUserRole,
   parseRoleDefinitions,
-  hasManageableAdmin,
+  hasReachableAdmin,
   PermissionsConfigError,
 } from '@/lib/permissions';
 
@@ -90,10 +90,15 @@ export async function PUT(request: Request) {
       );
     }
 
-    // Refuse the one edit that cannot be undone from this screen.
-    if (!hasManageableAdmin(config)) {
+    // Refuse the one edit that cannot be undone from this screen. A role
+    // definition holding the permission is not enough - somebody has to
+    // actually resolve to it.
+    if (!hasReachableAdmin(config)) {
       return NextResponse.json(
-        { error: 'At least one role must keep the admin:manage_roles permission' },
+        {
+          error:
+            'This change would leave nobody able to manage roles. Keep admin:manage_roles on the default role, or on a role held by a user override.',
+        },
         { status: 400 }
       );
     }

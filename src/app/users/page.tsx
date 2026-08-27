@@ -2,7 +2,7 @@
 
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { MainLayout } from '@/components/layout';
 import { Avatar, LoadingSpinner, AccessDenied } from '@/components/common';
 import { usePermissions } from '@/components/providers/PermissionProvider';
@@ -32,13 +32,7 @@ export default function UsersPage() {
     }
   }, [status, router]);
 
-  useEffect(() => {
-    if (canViewUsers && session?.accessToken) {
-      fetchUsers();
-    }
-  }, [canViewUsers, session]);
-
-  const fetchUsers = async () => {
+  const fetchUsers = useCallback(async () => {
     try {
       const response = await fetch('/api/devops/users');
       if (response.ok) {
@@ -55,7 +49,13 @@ export default function UsersPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    if (canViewUsers && session?.accessToken) {
+      fetchUsers();
+    }
+  }, [canViewUsers, session?.accessToken, fetchUsers]);
 
   // Get unique email domains for filter dropdown
   const emailDomains = Array.from(

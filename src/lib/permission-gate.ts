@@ -30,6 +30,9 @@ export type GateDecision = 'allow' | 'deny' | 'misconfigured';
  *   rejected instead of guessed at.
  * - An empty `anyPermission` list denies. "Any of nothing" is satisfied by
  *   nothing, and reading it as "no requirement" would open the gate.
+ * - An `anyPermission` that is present but not an array is `misconfigured`.
+ *   Types do not reach a JS caller or an `as any` cast, and a gate that
+ *   throws mid-render takes the surrounding page down with it.
  *
  * Callers render the fallback for both `deny` and `misconfigured`, so a
  * mistake fails closed.
@@ -46,8 +49,8 @@ export function decidePermissionGate(
     return has(permission) ? 'allow' : 'deny';
   }
 
-  const list = anyPermission as Permission[];
-  if (list.length === 0) return 'deny';
+  if (!Array.isArray(anyPermission)) return 'misconfigured';
+  if (anyPermission.length === 0) return 'deny';
 
-  return hasAny(list) ? 'allow' : 'deny';
+  return hasAny(anyPermission) ? 'allow' : 'deny';
 }

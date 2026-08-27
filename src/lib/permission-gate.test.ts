@@ -61,6 +61,22 @@ describe('decidePermissionGate', () => {
       ).toBe('misconfigured');
     });
 
+    it('reports a non-array anyPermission instead of throwing', () => {
+      // Reachable from a JS caller or an `as any` cast. Reading `.length` off
+      // null would take the whole surrounding page down mid-render.
+      const bad = { anyPermission: null } as unknown as Parameters<typeof decidePermissionGate>[0];
+      expect(() => decide(bad, ['admin:access'])).not.toThrow();
+      expect(decide(bad, ['admin:access'])).toBe('misconfigured');
+      expect(
+        decide(
+          { anyPermission: 'admin:access' } as unknown as Parameters<
+            typeof decidePermissionGate
+          >[0],
+          ['admin:access']
+        )
+      ).toBe('misconfigured');
+    });
+
     it('does not open even when the user holds everything', () => {
       const all: Permission[] = ['admin:access', 'admin:manage_roles', 'tickets:view_all'];
       expect(decide({}, all)).toBe('misconfigured');
