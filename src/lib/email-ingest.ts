@@ -14,6 +14,7 @@ import {
   renderEmailBody,
   renderEmailBodyHtml,
   rewriteCidReferences,
+  collectReferencedCids,
 } from '@/lib/email-clean';
 
 const TICKET_REF_REGEX = /\[ZapDesk #(\d+)\]/;
@@ -110,7 +111,14 @@ async function handleNewTicket(
     null
   );
 
-  const description = formatEmailBody(email, senderEmail, uploaded, referenceLinks, itemNotes);
+  const description = formatEmailBody(
+    email,
+    senderEmail,
+    uploaded,
+    referenceLinks,
+    itemNotes,
+    failures
+  );
 
   const workItem = await devops.createTicket(
     projectName,
@@ -156,7 +164,13 @@ async function handleThreadReply(
     }
 
     const renderedBody = renderEmailBodyForStorage(email, uploaded);
-    const appendix = buildAppendixHtml(uploaded, referenceLinks, itemNotes);
+    const appendix = buildAppendixHtml(
+      uploaded,
+      referenceLinks,
+      itemNotes,
+      failures,
+      splicedInlineCids(email, uploaded)
+    );
     const commentHtml = `
 <div style="font-family: sans-serif;">
   <p><strong>Email reply from:</strong> ${escapeHtml(senderEmail)}</p>
@@ -345,8 +359,14 @@ async function uploadAttachmentBlobs(
     }
     if (a.content) {
       if (!projectName) {
-        // Reply-path with no project resolved — record as a reference so the
-        // file at least appears as a link rather than vanishing.
+        // The reply path resolves the project from the work item and returns
+        // null on any non-OK response, so this is reachable in normal
+        // operation. There is nowhere to upload to, but the file must not
+        // disappear silently: surface the source link where we have one, and
+        // record the failure so the appendix can say what is missing.
+        if (a.referenceUrl) {
+          out.referenceLinks.push({ filename: a.filename, url: a.referenceUrl });
+        }
         out.failures.push({
           filename: a.filename,
           error: 'No project resolved for upload',
@@ -420,17 +440,52 @@ function renderEmailBodyForStorage(email: IngestableEmail, uploaded: UploadedAtt
   return renderEmailBody(email.body);
 }
 
-function buildAppendixHtml(
+/**
+ * The content ids that actually ended up inline in the rendered body.
+ *
+ * A plain-text body splices nothing, whatever content ids the attachments
+ * carry — so this is empty for it, and the appendix shows those images
+ * instead of dropping them.
+ */
+/** Exported for tests alongside `buildAppendixHtml`. */
+export function splicedInlineCids(
+  email: IngestableEmail,
+  uploaded: UploadedAttachment[]
+): Set<string> {
+  if (email.bodyType !== 'html') return new Set();
+  const referenced = collectReferencedCids(email.body);
+  const spliced = new Set<string>();
+  for (const u of uploaded) {
+    const cid = u.contentId?.toLowerCase();
+    if (cid && referenced.has(cid)) spliced.add(cid);
+  }
+  return spliced;
+}
+
+/**
+ * Exported for tests: it encodes the rule that nothing on an email may
+ * disappear from the rendered ticket without being accounted for.
+ */
+export function buildAppendixHtml(
   uploaded: UploadedAttachment[],
   referenceLinks: Array<{ filename: string; url: string }>,
-  itemNotes: Array<{ subject: string }>
+  itemNotes: Array<{ subject: string }>,
+  failures: Array<{ filename: string; error: unknown }>,
+  splicedCids: Set<string>
 ): string {
   const parts: string[] = [];
 
-  // Inline images that the body referenced via cid: are already rewritten in
-  // place; don't duplicate them here. Only show inline files when the body
-  // was plain text and we couldn't splice them in.
-  const orphanInline = uploaded.filter((u) => u.isInline && !u.contentId);
+  // Inline images the body actually referenced via cid: are already rewritten
+  // in place, so don't duplicate them. Everything else inline needs showing
+  // here or it is invisible to the reader.
+  //
+  // The test is what was spliced, not whether a contentId exists. Keying on
+  // the id alone hid two real cases: a plain-text body, which splices nothing
+  // and left every inline image unrendered, and an HTML body carrying a
+  // contentId it never referenced.
+  const orphanInline = uploaded.filter(
+    (u) => u.isInline && !(u.contentId && splicedCids.has(u.contentId.toLowerCase()))
+  );
   if (orphanInline.length) {
     const items = orphanInline
       .map(
@@ -458,6 +513,19 @@ function buildAppendixHtml(
     parts.push(`<p><strong>Forwarded messages:</strong></p><ul>${items}</ul>`);
   }
 
+  // Name what could not be attached. An agent seeing "3 attachments" in the
+  // customer's email and nothing in the ticket has no way to tell whether the
+  // customer forgot or ZapDesk dropped them — and the file is not linked to
+  // the work item either, so there is nowhere else to look.
+  const unattached = failures.filter((f) => !referenceLinks.some((r) => r.filename === f.filename));
+  if (unattached.length) {
+    const items = unattached.map((f) => `<li>${escapeHtml(f.filename)}</li>`).join('');
+    parts.push(
+      `<p><strong>Attachments that could not be added:</strong></p><ul>${items}</ul>` +
+        `<p><em>These were on the email but could not be uploaded. Ask the sender to resend them if they are needed.</em></p>`
+    );
+  }
+
   return parts.length ? `<hr/>${parts.join('')}` : '';
 }
 
@@ -481,10 +549,17 @@ function formatEmailBody(
   senderEmail: string,
   uploaded: UploadedAttachment[],
   referenceLinks: Array<{ filename: string; url: string }>,
-  itemNotes: Array<{ subject: string }>
+  itemNotes: Array<{ subject: string }>,
+  failures: Array<{ filename: string; error: unknown }>
 ): string {
   const renderedBody = renderEmailBodyForStorage(email, uploaded);
-  const appendix = buildAppendixHtml(uploaded, referenceLinks, itemNotes);
+  const appendix = buildAppendixHtml(
+    uploaded,
+    referenceLinks,
+    itemNotes,
+    failures,
+    splicedInlineCids(email, uploaded)
+  );
   return `
 <div style="font-family: sans-serif;">
   <p><strong>From:</strong> ${escapeHtml(senderEmail)}</p>

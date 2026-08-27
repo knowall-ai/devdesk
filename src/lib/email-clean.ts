@@ -117,9 +117,20 @@ export function sanitizeEmailHtml(html: string): string {
       .replace(/\son\w+\s*=\s*"[^"]*"/gi, '')
       .replace(/\son\w+\s*=\s*'[^']*'/gi, '')
       .replace(/\son\w+\s*=\s*[^\s>]+/gi, '')
-      // Neutralise javascript: and data: (non-image) URLs.
-      .replace(/(href|src)\s*=\s*"javascript:[^"]*"/gi, '$1="#"')
-      .replace(/(href|src)\s*=\s*'javascript:[^']*'/gi, "$1='#'")
+      // Neutralise script-bearing URLs, quoted or bare. `data:` is allowed
+      // through only for images, which is how Outlook embeds pasted
+      // screenshots; every other media type can carry markup.
+      //
+      // Best-effort by design: this is a regex over untrusted markup, so an
+      // attacker with enough encoding tricks can get past it. It is
+      // defence-in-depth ahead of the render-time sanitisers — ZapDesk's own,
+      // and DevOps's — not a substitute for them.
+      .replace(/(href|src)\s*=\s*"\s*(?:javascript|vbscript):[^"]*"/gi, '$1="#"')
+      .replace(/(href|src)\s*=\s*'\s*(?:javascript|vbscript):[^']*'/gi, "$1='#'")
+      .replace(/(href|src)\s*=\s*(?:javascript|vbscript):[^\s>]*/gi, '$1="#"')
+      .replace(/(href|src)\s*=\s*"\s*data:(?!image\/)[^"]*"/gi, '$1="#"')
+      .replace(/(href|src)\s*=\s*'\s*data:(?!image\/)[^']*'/gi, "$1='#'")
+      .replace(/(href|src)\s*=\s*data:(?!image\/)[^\s>]*/gi, '$1="#"')
   );
 }
 
@@ -175,6 +186,27 @@ export function rewriteCidReferences(
 }
 
 /**
+ * The `cid:` content ids an HTML body actually references from an `<img>` tag.
+ *
+ * Used to tell an inline file that was spliced into the body from one that was
+ * not: a plain-text body splices nothing, and an HTML body can carry a
+ * `contentId` it never references. Either way the file has to be surfaced
+ * somewhere or it is invisible to the reader.
+ *
+ * Ids are lower-cased, matching how `rewriteCidReferences` looks them up.
+ */
+export function collectReferencedCids(html: string): Set<string> {
+  const found = new Set<string>();
+  if (!html) return found;
+  const pattern = /<img\b[^>]*?\bsrc\s*=\s*(["'])cid:([^"'>\s]+)\1/gi;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(html)) !== null) {
+    found.add(match[2].toLowerCase());
+  }
+  return found;
+}
+
+/**
  * Sanitise + signature-strip + truncate an HTML email body for safe storage
  * in a DevOps work item. Mirror of `renderEmailBody` for the HTML path.
  */
@@ -185,6 +217,12 @@ export function renderEmailBodyHtml(rawHtml: string): string {
     stripped.length > MAX_BODY_CHARS
       ? stripped.slice(0, MAX_BODY_CHARS) + '<p><em>[truncated]</em></p>'
       : stripped;
-  if (!truncated.replace(/<[^>]+>/g, '').trim()) return '<em>No content</em>';
+  // A screenshot-only email has no text nodes at all. Testing text alone threw
+  // away the inline image that rewriteCidReferences had just spliced in, and
+  // replaced the whole body with "No content" — so embedded media counts as
+  // content in its own right.
+  const hasText = truncated.replace(/<[^>]+>/g, '').trim().length > 0;
+  const hasMedia = /<img\b/i.test(truncated);
+  if (!hasText && !hasMedia) return '<em>No content</em>';
   return `<div style="font-family: inherit;">${truncated}</div>`;
 }

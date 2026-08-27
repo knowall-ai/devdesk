@@ -22,6 +22,32 @@ const GRAPH_BASE_URL = 'https://graph.microsoft.com/v1.0';
 // schedule even 25 / minute = 1500 / hour which is plenty for B2B support.
 const MAX_PER_POLL = 25;
 
+/**
+ * Every outbound request here gets a deadline.
+ *
+ * The poll runs on a timer against Graph and OneDrive/SharePoint, and a
+ * request with no timeout waits forever: a stalled attachment download blocks
+ * ticket creation on the new-ticket path and comment processing on replies,
+ * with no error and nothing to retry.
+ */
+const GRAPH_TIMEOUT_MS = 30_000;
+
+/**
+ * Downloads get longer — a large OneDrive file is legitimately slow — but not
+ * unlimited.
+ */
+const DOWNLOAD_TIMEOUT_MS = 60_000;
+
+/**
+ * Ceiling on a single downloaded attachment.
+ *
+ * The body is buffered into memory and base64-encoded, which inflates it by a
+ * third, so an unbounded download is a way to exhaust the process. Files past
+ * this are surfaced as a link instead, which is what happens for any file
+ * Graph declines to give us a download URL for anyway.
+ */
+const MAX_DOWNLOAD_BYTES = 25 * 1024 * 1024;
+
 interface GraphMessage {
   id: string;
   subject?: string;
@@ -147,6 +173,7 @@ async function listUnread(token: string, mailbox: string): Promise<GraphMessage[
     `&$top=${MAX_PER_POLL}`;
 
   const res = await fetch(url, {
+    signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
     headers: {
       Authorization: `Bearer ${token}`,
       // HTML so `<img src="cid:...">` references survive — we rewrite them
@@ -174,7 +201,10 @@ async function fetchAttachments(
   const url =
     `${GRAPH_BASE_URL}/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(messageId)}/attachments` +
     `?$expand=microsoft.graph.itemAttachment/item`;
-  const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
+  });
   if (!res.ok) {
     throw new Error(`Graph list-attachments failed (${res.status}): ${await res.text()}`);
   }
@@ -214,20 +244,39 @@ async function fetchAttachments(
         const sourceUrl = a.sourceUrl;
         if (downloadUrl) {
           try {
-            const fileRes = await fetch(downloadUrl);
+            const fileRes = await fetch(downloadUrl, {
+              signal: AbortSignal.timeout(DOWNLOAD_TIMEOUT_MS),
+            });
             if (fileRes.ok) {
-              const buf = Buffer.from(await fileRes.arrayBuffer());
-              result.push({
-                filename,
-                contentType,
-                content: buf.toString('base64'),
-                referenceUrl: sourceUrl,
-              });
-              break;
+              // Trust the declared length when there is one, and check the
+              // real size after buffering when there is not — a chunked
+              // response can lie by omission.
+              const declared = Number(fileRes.headers.get('content-length'));
+              if (Number.isFinite(declared) && declared > MAX_DOWNLOAD_BYTES) {
+                console.warn(
+                  `[Poll] referenceAttachment ${a.id} (${filename}) is ${declared} bytes — over the ${MAX_DOWNLOAD_BYTES} limit, falling back to link`
+                );
+              } else {
+                const buf = Buffer.from(await fileRes.arrayBuffer());
+                if (buf.byteLength > MAX_DOWNLOAD_BYTES) {
+                  console.warn(
+                    `[Poll] referenceAttachment ${a.id} (${filename}) downloaded ${buf.byteLength} bytes — over the ${MAX_DOWNLOAD_BYTES} limit, falling back to link`
+                  );
+                } else {
+                  result.push({
+                    filename,
+                    contentType,
+                    content: buf.toString('base64'),
+                    referenceUrl: sourceUrl,
+                  });
+                  break;
+                }
+              }
+            } else {
+              console.warn(
+                `[Poll] referenceAttachment ${a.id} (${filename}) downloadUrl returned ${fileRes.status} — falling back to link`
+              );
             }
-            console.warn(
-              `[Poll] referenceAttachment ${a.id} (${filename}) downloadUrl returned ${fileRes.status} — falling back to link`
-            );
           } catch (err) {
             console.warn(
               `[Poll] referenceAttachment ${a.id} (${filename}) download failed — falling back to link:`,
@@ -268,6 +317,7 @@ async function markRead(token: string, mailbox: string, messageId: string): Prom
     `${GRAPH_BASE_URL}/users/${encodeURIComponent(mailbox)}/messages/${encodeURIComponent(messageId)}`,
     {
       method: 'PATCH',
+      signal: AbortSignal.timeout(GRAPH_TIMEOUT_MS),
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
