@@ -43,6 +43,10 @@ export default function TeamPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const { hasPermission } = usePermissions();
+  // Hoisted so the data effects below can check it too. Rendering AccessDenied
+  // while still firing the requests behind it wastes a DevOps round trip per
+  // page load and fills the console with 403s that describe nothing wrong.
+  const canViewTeam = hasPermission('team:view');
   const [teamData, setTeamData] = useState<TeamData | null>(null);
   const [activityData, setActivityData] = useState<ActivityData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -115,11 +119,11 @@ export default function TeamPage() {
   }, [ticketsOnly]);
 
   useEffect(() => {
-    if (session?.accessToken) {
+    if (canViewTeam && session?.accessToken) {
       fetchTeamData();
       fetchActivityData();
     }
-  }, [session?.accessToken, fetchTeamData, fetchActivityData]);
+  }, [canViewTeam, session?.accessToken, fetchTeamData, fetchActivityData]);
 
   // Pre-calculate max values once for workload distribution (must be before conditional returns)
   const maxAssigned = React.useMemo(() => {
@@ -244,7 +248,7 @@ export default function TeamPage() {
     },
   ];
 
-  if (!hasPermission('team:view')) {
+  if (!canViewTeam) {
     return (
       <MainLayout>
         <AccessDenied message="You do not have permission to view the Team page." />

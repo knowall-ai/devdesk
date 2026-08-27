@@ -256,13 +256,21 @@ export async function GET(request: NextRequest) {
     await fetchAndCacheStateCategories(session.accessToken!, organization);
 
     const devopsService = new AzureDevOpsService(session.accessToken!, organization);
-    const tickets = await devopsService.getAllTickets(ticketsOnly, TICKET_WORK_ITEM_TYPES);
+
+    // The client role is defined as "view and create own tickets only", so a
+    // caller passing ticketsOnly=false must not widen that to every work item
+    // they happen to have raised.
+    const canViewAll = hasPermission(permissions, 'tickets:view_all');
+    const tickets = await devopsService.getAllTickets(
+      canViewAll ? ticketsOnly : true,
+      TICKET_WORK_ITEM_TYPES
+    );
 
     // Filter tickets based on view
     let filteredTickets = filterTicketsByView(tickets, view, session.user?.email);
 
     // If user only has view_own (client role), filter to their tickets only
-    if (!hasPermission(permissions, 'tickets:view_all')) {
+    if (!canViewAll) {
       const userEmail = session.user?.email?.toLowerCase();
       filteredTickets = filteredTickets.filter(
         (t) => t.requester.email?.toLowerCase() === userEmail

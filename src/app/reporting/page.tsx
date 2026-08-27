@@ -47,6 +47,10 @@ export default function LiveDashboardPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const { hasPermission } = usePermissions();
+  // Hoisted so the data effects below can check it too. Rendering AccessDenied
+  // while still firing the requests behind it wastes a DevOps round trip per
+  // page load and fills the console with 403s that describe nothing wrong.
+  const canViewReporting = hasPermission('reporting:view');
   const { get: devOpsGet, hasOrganization } = useDevOpsApi();
   const [stats, setStats] = useState<LiveStats | null>(null);
   const [allTickets, setAllTickets] = useState<TicketType[]>([]);
@@ -153,21 +157,21 @@ export default function LiveDashboardPage() {
   }, [session?.accessToken, hasOrganization, devOpsGet]);
 
   useEffect(() => {
-    if (session?.accessToken && hasOrganization) {
+    if (canViewReporting && session?.accessToken && hasOrganization) {
       fetchData();
     }
-  }, [session?.accessToken, hasOrganization, fetchData]);
+  }, [canViewReporting, session?.accessToken, hasOrganization, fetchData]);
 
   // Auto-refresh every 30 seconds
   useEffect(() => {
-    if (!autoRefresh || !session?.accessToken || !hasOrganization) return;
+    if (!canViewReporting || !autoRefresh || !session?.accessToken || !hasOrganization) return;
 
     const interval = setInterval(() => {
       fetchData();
     }, 30000);
 
     return () => clearInterval(interval);
-  }, [autoRefresh, session?.accessToken, hasOrganization, fetchData]);
+  }, [canViewReporting, autoRefresh, session?.accessToken, hasOrganization, fetchData]);
 
   // Compute chart data from tickets filtered by date range
   const chartData = useMemo(() => {
@@ -316,7 +320,7 @@ export default function LiveDashboardPage() {
     },
   ];
 
-  if (!hasPermission('reporting:view')) {
+  if (!canViewReporting) {
     return (
       <MainLayout>
         <AccessDenied message="You do not have permission to view the Live Dashboard." />

@@ -69,9 +69,16 @@ export default function PermissionsManager() {
     fetchAuditLog();
   }, [fetchConfig, fetchAuditLog]);
 
+  /** Read the server's message off a failed response, falling back to `fallback`. */
+  const errorFrom = async (response: Response, fallback: string): Promise<string> => {
+    const data = await response.json().catch(() => ({}));
+    return typeof data?.error === 'string' ? data.error : fallback;
+  };
+
   const handleDefaultRoleChange = async (role: UserRole) => {
     if (!config) return;
     setSaving(true);
+    setError(null);
     try {
       const response = await fetch('/api/permissions/config', {
         method: 'PUT',
@@ -81,6 +88,8 @@ export default function PermissionsManager() {
       if (response.ok) {
         setConfig({ ...config, defaultRole: role });
         fetchAuditLog();
+      } else {
+        setError(await errorFrom(response, 'Failed to update default role.'));
       }
     } catch {
       setError('Failed to update default role.');
@@ -92,6 +101,7 @@ export default function PermissionsManager() {
   const handleAddUser = async () => {
     if (!newUserEmail.trim()) return;
     setSaving(true);
+    setError(null);
     try {
       const userId = newUserEmail.toLowerCase();
       const response = await fetch(`/api/permissions/users/${encodeURIComponent(userId)}`, {
@@ -110,6 +120,8 @@ export default function PermissionsManager() {
         setShowAddUser(false);
         fetchConfig();
         fetchAuditLog();
+      } else {
+        setError(await errorFrom(response, 'Failed to add user override.'));
       }
     } catch {
       setError('Failed to add user override.');
@@ -120,6 +132,7 @@ export default function PermissionsManager() {
 
   const handleChangeRole = async (user: UserPermissionOverride, newRole: UserRole) => {
     setSaving(true);
+    setError(null);
     try {
       const response = await fetch(`/api/permissions/users/${encodeURIComponent(user.email)}`, {
         method: 'PUT',
@@ -133,6 +146,8 @@ export default function PermissionsManager() {
       if (response.ok) {
         fetchConfig();
         fetchAuditLog();
+      } else {
+        setError(await errorFrom(response, 'Failed to update user role.'));
       }
     } catch {
       setError('Failed to update user role.');
@@ -143,6 +158,7 @@ export default function PermissionsManager() {
 
   const handleRemoveUser = async (email: string) => {
     setSaving(true);
+    setError(null);
     try {
       const response = await fetch(`/api/permissions/users/${encodeURIComponent(email)}`, {
         method: 'DELETE',
@@ -150,6 +166,8 @@ export default function PermissionsManager() {
       if (response.ok) {
         fetchConfig();
         fetchAuditLog();
+      } else {
+        setError(await errorFrom(response, 'Failed to remove user override.'));
       }
     } catch {
       setError('Failed to remove user override.');

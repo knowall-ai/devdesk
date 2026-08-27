@@ -1,7 +1,14 @@
 import { NextResponse } from 'next/server';
 import { requirePermission, isAuthed } from '@/lib/api-auth';
-import { readPermissionsConfig, writePermissionsConfig, appendAuditLog } from '@/lib/permissions';
-import type { PermissionsConfig } from '@/types';
+import {
+  readPermissionsConfig,
+  writePermissionsConfig,
+  appendAuditLog,
+  isUserRole,
+  parseRoleDefinitions,
+  hasManageableAdmin,
+  PermissionsConfigError,
+} from '@/lib/permissions';
 
 // GET /api/permissions/config - Get full permissions config (admin only)
 export async function GET() {
@@ -13,28 +20,82 @@ export async function GET() {
     return NextResponse.json(config);
   } catch (error) {
     console.error('Error fetching permissions config:', error);
+    if (error instanceof PermissionsConfigError) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
     return NextResponse.json({ error: 'Failed to fetch permissions config' }, { status: 500 });
   }
 }
 
-// PUT /api/permissions/config - Update full permissions config (admin only)
+// PUT /api/permissions/config - Update default role and role definitions (admin only)
 export async function PUT(request: Request) {
   try {
     const auth = await requirePermission('admin:manage_roles');
     if (!isAuthed(auth)) return auth;
 
-    const body = (await request.json()) as Partial<PermissionsConfig>;
+    // `as Partial<PermissionsConfig>` erases at compile time, which would let
+    // any JSON body become the authoritative permission state. Check the shape
+    // at runtime instead.
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Request body must be valid JSON' }, { status: 400 });
+    }
+
+    if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+      return NextResponse.json({ error: 'Request body must be an object' }, { status: 400 });
+    }
+
+    const update = body as Record<string, unknown>;
+    const unknownKeys = Object.keys(update).filter((k) => k !== 'defaultRole' && k !== 'roles');
+    if (unknownKeys.length > 0) {
+      return NextResponse.json(
+        {
+          error: `Unsupported field(s): ${unknownKeys.join(', ')}. This endpoint updates defaultRole and roles only.`,
+        },
+        { status: 400 }
+      );
+    }
 
     const config = readPermissionsConfig();
 
-    // Update default role if provided
-    if (body.defaultRole) {
-      config.defaultRole = body.defaultRole;
+    if (update.roles !== undefined) {
+      const roles = parseRoleDefinitions(update.roles);
+      if (!roles) {
+        return NextResponse.json(
+          {
+            error:
+              'roles must be an array of role definitions using known role names and permissions',
+          },
+          { status: 400 }
+        );
+      }
+      config.roles = roles;
     }
 
-    // Update roles if provided
-    if (body.roles) {
-      config.roles = body.roles;
+    if (update.defaultRole !== undefined) {
+      if (!isUserRole(update.defaultRole)) {
+        return NextResponse.json({ error: 'defaultRole is not a known role' }, { status: 400 });
+      }
+      config.defaultRole = update.defaultRole;
+    }
+
+    // A defaultRole with no matching definition resolves to an empty permission
+    // set, locking out every user who has no explicit override.
+    if (!config.roles.some((r) => r.name === config.defaultRole)) {
+      return NextResponse.json(
+        { error: `defaultRole "${config.defaultRole}" has no matching role definition` },
+        { status: 400 }
+      );
+    }
+
+    // Refuse the one edit that cannot be undone from this screen.
+    if (!hasManageableAdmin(config)) {
+      return NextResponse.json(
+        { error: 'At least one role must keep the admin:manage_roles permission' },
+        { status: 400 }
+      );
     }
 
     writePermissionsConfig(config);
@@ -52,6 +113,9 @@ export async function PUT(request: Request) {
     return NextResponse.json({ success: true, config });
   } catch (error) {
     console.error('Error updating permissions config:', error);
+    if (error instanceof PermissionsConfigError) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
     return NextResponse.json({ error: 'Failed to update permissions config' }, { status: 500 });
   }
 }

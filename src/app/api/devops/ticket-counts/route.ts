@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AzureDevOpsService } from '@/lib/devops';
 import { requireAnyPermission, isAuthed } from '@/lib/api-auth';
+import { hasPermission } from '@/lib/permissions';
 import type { TicketStatus } from '@/types';
 
 export async function GET(request: NextRequest) {
   try {
     const auth = await requireAnyPermission(['tickets:view_all', 'tickets:view_own']);
     if (!isAuthed(auth)) return auth;
-    const { session } = auth;
+    const { session, permissions } = auth;
 
     // Get organization from header (client sends from localStorage selection)
     const organization = request.headers.get('x-devops-org');
@@ -17,8 +18,16 @@ export async function GET(request: NextRequest) {
     }
 
     const devopsService = new AzureDevOpsService(session.accessToken!, organization);
-    const tickets = await devopsService.getAllTickets();
+    const allTickets = await devopsService.getAllTickets();
     const currentUserEmail = session.user?.email?.toLowerCase();
+
+    // Every count below is derived from this set. Without narrowing it first, a
+    // client-role user holding only tickets:view_own still learns how many
+    // tickets the whole organisation has open, unassigned or pending -- the
+    // counts are aggregate, but they describe work the user cannot see.
+    const tickets = hasPermission(permissions, 'tickets:view_all')
+      ? allTickets
+      : allTickets.filter((t) => t.requester.email?.toLowerCase() === currentUserEmail);
 
     const today = new Date();
     today.setHours(0, 0, 0, 0);

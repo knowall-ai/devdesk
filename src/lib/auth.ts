@@ -125,8 +125,19 @@ export const authOptions: NextAuthOptions = {
       session.accessToken = token.accessToken;
       session.refreshToken = token.refreshToken;
       session.error = token.error;
-      session.role = token.role;
-      session.permissions = token.permissions;
+
+      // Resolved here rather than read off the token: this callback runs on
+      // every session check, so an admin's change reaches the UI on the next
+      // one instead of waiting for the token to be replaced.
+      const email = session.user?.email;
+      if (email) {
+        const resolved = resolveUserPermissions(email, token.id);
+        session.role = resolved.role;
+        session.permissions = resolved.permissions;
+      } else {
+        session.role = token.role;
+        session.permissions = token.permissions;
+      }
       if (token.id) {
         session.user.id = token.id;
       }

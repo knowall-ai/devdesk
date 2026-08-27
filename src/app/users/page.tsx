@@ -15,6 +15,10 @@ export default function UsersPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
   const { hasPermission } = usePermissions();
+  // Hoisted so the data effects below can check it too. Rendering AccessDenied
+  // while still firing the requests behind it wastes a DevOps round trip per
+  // page load and fills the console with 403s that describe nothing wrong.
+  const canViewUsers = hasPermission('users:view');
   const [users, setUsers] = useState<Customer[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
@@ -29,10 +33,10 @@ export default function UsersPage() {
   }, [status, router]);
 
   useEffect(() => {
-    if (session?.accessToken) {
+    if (canViewUsers && session?.accessToken) {
       fetchUsers();
     }
-  }, [session]);
+  }, [canViewUsers, session]);
 
   const fetchUsers = async () => {
     try {
@@ -91,7 +95,7 @@ export default function UsersPage() {
     return null;
   }
 
-  if (!hasPermission('users:view')) {
+  if (!canViewUsers) {
     return (
       <MainLayout>
         <AccessDenied message="You do not have permission to view the Users page." />

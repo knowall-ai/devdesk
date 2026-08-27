@@ -510,24 +510,28 @@ export interface WorkItem {
 
 // ===== Permissions & RBAC Types =====
 
-export type UserRole = 'admin' | 'agent' | 'client';
+export const USER_ROLES = ['admin', 'agent', 'client'] as const;
+export type UserRole = (typeof USER_ROLES)[number];
 
-export type Permission =
-  | 'admin:access'
-  | 'admin:manage_roles'
-  | 'tickets:view_all'
-  | 'tickets:view_own'
-  | 'tickets:create'
-  | 'tickets:edit'
-  | 'tickets:assign'
-  | 'tickets:change_status'
-  | 'tickets:create_internal_notes'
-  | 'tickets:delete'
-  | 'team:view'
-  | 'users:view'
-  | 'projects:view'
-  | 'reporting:view'
-  | 'reporting:monthly_checkpoint';
+export const PERMISSIONS = [
+  'admin:access',
+  'admin:manage_roles',
+  'tickets:view_all',
+  'tickets:view_own',
+  'tickets:create',
+  'tickets:edit',
+  'tickets:assign',
+  'tickets:change_status',
+  'tickets:create_internal_notes',
+  'tickets:delete',
+  'team:view',
+  'users:view',
+  'projects:view',
+  'reporting:view',
+  'reporting:monthly_checkpoint',
+] as const;
+
+export type Permission = (typeof PERMISSIONS)[number];
 
 export interface RoleDefinition {
   name: UserRole;

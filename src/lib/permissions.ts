@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
+import { PERMISSIONS, USER_ROLES } from '@/types';
 import type {
   PermissionsConfig,
   UserPermissionOverride,
@@ -77,18 +78,133 @@ function ensureDataDir(): void {
   }
 }
 
+// ===== Validation =====
+
+/**
+ * Thrown when `permissions.json` exists but cannot be trusted.
+ *
+ * Callers must not paper over this with defaults: the file is the
+ * authoritative record of who may do what, and a half-written or hand-edited
+ * file that silently resolves to `DEFAULT_CONFIG` would hand every
+ * authenticated user the default `agent` role -- broad ticket access -- at
+ * exactly the moment the system has lost track of who they are.
+ */
+export class PermissionsConfigError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PermissionsConfigError';
+  }
+}
+
+export function isUserRole(value: unknown): value is UserRole {
+  return typeof value === 'string' && (USER_ROLES as readonly string[]).includes(value);
+}
+
+export function isPermission(value: unknown): value is Permission {
+  return typeof value === 'string' && (PERMISSIONS as readonly string[]).includes(value);
+}
+
+/**
+ * Validate a permission array. Returns `null` -- not a filtered array -- when
+ * anything is unrecognised, so a typo is reported rather than quietly dropped.
+ */
+export function parsePermissionList(value: unknown): Permission[] | null {
+  if (!Array.isArray(value)) return null;
+  if (!value.every(isPermission)) return null;
+  return [...new Set(value as Permission[])];
+}
+
+export function parseRoleDefinitions(value: unknown): RoleDefinition[] | null {
+  if (!Array.isArray(value) || value.length === 0) return null;
+
+  const roles: RoleDefinition[] = [];
+  const seen = new Set<string>();
+
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null) return null;
+    const r = entry as Record<string, unknown>;
+
+    if (!isUserRole(r.name) || seen.has(r.name)) return null;
+    if (typeof r.label !== 'string' || !r.label.trim()) return null;
+    if (r.description !== undefined && typeof r.description !== 'string') return null;
+
+    const permissions = parsePermissionList(r.permissions);
+    if (!permissions) return null;
+
+    seen.add(r.name);
+    roles.push({
+      name: r.name,
+      label: r.label,
+      description: typeof r.description === 'string' ? r.description : '',
+      permissions,
+    });
+  }
+
+  return roles;
+}
+
+/**
+ * Validate a whole config. Anything the app cannot act on is rejected --
+ * including a `defaultRole` with no matching definition, which would resolve
+ * to an empty permission set and lock users out with no explanation.
+ */
+export function validatePermissionsConfig(value: unknown): PermissionsConfig | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const c = value as Record<string, unknown>;
+
+  const roles = parseRoleDefinitions(c.roles);
+  if (!roles) return null;
+
+  if (!isUserRole(c.defaultRole)) return null;
+  if (!roles.some((r) => r.name === c.defaultRole)) return null;
+
+  if (c.users !== undefined && !Array.isArray(c.users)) return null;
+  const users = (c.users ?? []) as UserPermissionOverride[];
+  for (const u of users) {
+    if (typeof u !== 'object' || u === null) return null;
+    if (typeof u.email !== 'string' || !u.email.trim()) return null;
+    if (!isUserRole(u.role)) return null;
+    if (u.permissions !== undefined && !parsePermissionList(u.permissions)) return null;
+    if (u.revokedPermissions !== undefined && !parsePermissionList(u.revokedPermissions)) {
+      return null;
+    }
+  }
+
+  return { defaultRole: c.defaultRole, roles, users };
+}
+
+/**
+ * A config with no role holding `admin:manage_roles` cannot be edited back
+ * through the UI: the last administrator loses the screen that would undo it.
+ * Recovering means hand-editing JSON on the server, so the write endpoint
+ * refuses the change instead.
+ */
+export function hasManageableAdmin(config: PermissionsConfig): boolean {
+  return config.roles.some((r) => r.permissions.includes('admin:manage_roles'));
+}
+
 export function readPermissionsConfig(): PermissionsConfig {
   ensureDataDir();
   if (!existsSync(CONFIG_PATH)) {
     writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
     return { ...DEFAULT_CONFIG };
   }
+
+  let parsed: unknown;
   try {
-    const raw = readFileSync(CONFIG_PATH, 'utf-8');
-    return JSON.parse(raw) as PermissionsConfig;
-  } catch {
-    return { ...DEFAULT_CONFIG };
+    parsed = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8'));
+  } catch (error) {
+    throw new PermissionsConfigError(
+      `${CONFIG_PATH} could not be read or parsed: ${(error as Error).message}`
+    );
   }
+
+  const config = validatePermissionsConfig(parsed);
+  if (!config) {
+    throw new PermissionsConfigError(`${CONFIG_PATH} is not a valid permissions config`);
+  }
+
+  return config;
 }
 
 export function writePermissionsConfig(config: PermissionsConfig): void {
@@ -101,7 +217,17 @@ export function writePermissionsConfig(config: PermissionsConfig): void {
  * Checks for user-specific overrides, otherwise falls back to defaultRole.
  */
 export function resolveUserPermissions(email: string, userId?: string): SessionPermissions {
-  const config = readPermissionsConfig();
+  let config: PermissionsConfig;
+  try {
+    config = readPermissionsConfig();
+  } catch (error) {
+    // Not gated behind a debug flag: this is a fault an operator has to see.
+    console.error(
+      'Permissions config is unusable - denying all permissions until it is repaired.',
+      error
+    );
+    return { role: 'client', permissions: [] };
+  }
 
   // Find user override by email (case-insensitive) or userId
   const override = config.users.find(

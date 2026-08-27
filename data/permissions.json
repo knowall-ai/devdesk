@@ -15,6 +15,7 @@
         "tickets:assign",
         "tickets:change_status",
         "tickets:create_internal_notes",
+        "tickets:delete",
         "team:view",
         "users:view",
         "projects:view",
