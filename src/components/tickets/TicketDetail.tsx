@@ -93,6 +93,14 @@ const priorityOptions: Array<{ value: number; label: TicketPriority }> = [
   { value: 4, label: 'Low' },
 ];
 
+/**
+ * The full-page ticket view: description, fields, attachments and comments.
+ *
+ * Every field that holds Azure DevOps HTML renders through `UserHtml`. The one
+ * exception is the description editor, which is `contentEditable` and carries a
+ * `ref`, so it cannot be a component — it sets sanitised markup directly, and
+ * sanitises again on save (issue #413).
+ */
 export default function TicketDetail({
   ticket,
   comments,

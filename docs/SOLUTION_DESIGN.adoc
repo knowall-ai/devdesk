@@ -196,6 +196,84 @@ ZapDesk is a customer support ticketing portal that provides a Zendesk-like expe
 * Validates sender domain for project mapping
 * Rate limiting recommended at infrastructure level
 
+=== Rendering Work Item HTML
+
+Azure DevOps stores descriptions, repro steps, resolutions and comments as
+HTML, so ZapDesk has to render markup rather than text. Every render site is
+therefore an injection sink: anyone who can comment on a work item in the org
+could otherwise run script in the browser of anyone who opens that ticket in
+ZapDesk.
+
+*The boundary is `src/lib/sanitize-html.ts`.* Nothing from Azure DevOps reaches
+the DOM as markup without passing through it.
+
+[cols="1,3"]
+|===
+|Piece |Responsibility
+
+|`sanitizeUserHtml(html, { mentions })`
+|Runs DOMPurify against an allowlist shaped around what the DevOps rich-text
+editor emits. Returns markup safe to pass to `dangerouslySetInnerHTML`.
+
+|`htmlToPlainText(html, maxLength)`
+|Reduces work item HTML to text for previews, decoding entities and truncating
+against the *text* length. Render the result as a text node, never as HTML.
+
+|`UserHtml` (`src/components/common/UserHtml.tsx`)
+|The component every read-only render site uses. Rewrites attachment URLs to
+the proxy, then sanitises.
+
+|`highlightMentionsIn(root)` (`src/lib/mentions.ts`)
+|Wraps `@mentions` in `<span class="mention">` across the text nodes of the
+already-sanitised DOM.
+|===
+
+==== Why a component rather than a helper
+
+There were eleven call sites using `dangerouslySetInnerHTML` directly, none of
+them sanitising. Consolidating them into `UserHtml` matters as much as the
+sanitiser itself: the next person rendering comment HTML reaches for the
+component rather than the raw attribute, so the sanitiser cannot be forgotten
+at a new call site.
+
+*When adding a render site, use `UserHtml`.* Do not call
+`dangerouslySetInnerHTML` directly.
+
+==== The one documented exception
+
+`TicketDetail`'s description editor is `contentEditable` and carries a `ref`,
+so it cannot be a component. It sets sanitised markup directly, and sanitises
+again on save — `contentEditable` accepts whatever markup was on the clipboard,
+so the value going back to Azure DevOps is cleaned too.
+
+==== Allowlist decisions
+
+* *`style` is allowed, `class` is not.* DevOps inlines colours and alignment on
+  spans and table cells, and dropping `style` mangles pasted content; DOMPurify
+  parses the declaration list and removes anything that can fetch or execute.
+  `class` is different — our own stylesheet gives class names meaning, and a
+  comment author should not be able to borrow UI chrome.
+* *Links are forced to `rel="noopener noreferrer nofollow"`.* `target="_blank"`
+  without `noopener` hands the opened page a live `window.opener` back to
+  ZapDesk, and DevOps content routinely carries `target`.
+* *Protocols are checked in an `afterSanitizeAttributes` hook* against `href`
+  and `src` only. DOMPurify's `ALLOWED_URI_REGEXP` is applied to _every_
+  attribute value, so setting it there silently dropped `colspan`, `width` and
+  `align` from pasted tables — a table span is not a URL and never matches a
+  URL pattern. Values are stripped of control characters before the check, so
+  `java<TAB>script:` does not slip past.
+* *Mentions are applied to text nodes, not to the markup string.* A string
+  replace cannot tell prose from an attribute value, so a comment containing
+  `<a title="ask @bob">` previously had its _attribute_ rewritten — mangled
+  markup, and a quote break that is an injection vector in its own right.
+
+==== Server-side behaviour
+
+DOMPurify needs a DOM. Every caller is a client component whose content arrives
+from a client-side fetch, so these branches never render during SSR. If one
+ever does, `sanitizeUserHtml` degrades to stripped plain text rather than
+trusting the input.
+
 == Multi-Tenant Design
 
 === Project-Based Tenancy

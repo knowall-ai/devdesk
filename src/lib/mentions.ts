@@ -22,6 +22,16 @@ export const MENTION_CLASS = 'mention';
 /** Elements whose text is not prose, and must not be rewritten. */
 const SKIP_ELEMENTS = new Set(['A', 'CODE', 'PRE', 'SCRIPT', 'STYLE', 'TEXTAREA']);
 
+/**
+ * True when `node` sits inside an element whose text must be left alone — a
+ * link, a code block, or a mention we have already wrapped.
+ *
+ * Walks ancestors rather than checking the immediate parent, because the
+ * sanitised DOM nests freely (`<pre><code><span>@bob</span></code></pre>`).
+ *
+ * @param node The text node being considered for rewriting.
+ * @returns `true` if the node must be skipped.
+ */
 function isInsideSkipped(node: Node): boolean {
   for (let el = node.parentElement; el; el = el.parentElement) {
     if (SKIP_ELEMENTS.has(el.tagName)) return true;

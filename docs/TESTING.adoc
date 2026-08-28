@@ -11,12 +11,54 @@ This guide covers testing strategies and procedures for ZapDesk.
 
 === Unit Tests
 
-Unit tests for utility functions and services.
+Unit tests for utility functions and services, run with Vitest. Files are
+`src/**/*.test.ts`.
 
 [source,bash]
 ----
-npm run test:unit
+bun run test:unit         # single run
+bun run test:unit:watch   # watch mode
 ----
+
+==== Test environment
+
+`vitest.config.ts` runs on the `node` environment, which is what most utility
+tests want and is the faster of the two.
+
+Tests that need a real DOM opt in per file with a docblock on the first line,
+rather than switching the whole suite to `jsdom`:
+
+[source,typescript]
+----
+// @vitest-environment jsdom
+----
+
+`src/lib/sanitize-html.test.ts` uses this, because DOMPurify sanitises by
+parsing markup into a DOM and walking it — there is nothing to test against
+without one. `jsdom` is a dev dependency and is only loaded by files carrying
+the docblock.
+
+==== HTML sanitisation coverage
+
+`src/lib/sanitize-html.test.ts` covers the boundary described in
+`SOLUTION_DESIGN.adoc` under _Rendering Work Item HTML_, in three groups:
+
+* *Vectors that must not survive* — `<script>`, inline event handlers
+  (`onerror`, `onclick`), `javascript:` URLs including control-character
+  variants such as `java<TAB>script:`, `vbscript:`, non-image `data:` URLs,
+  `<iframe>` and `<form>`.
+* *Formatting that must survive* — bold, lists, links, tables with `colspan`,
+  `width` and `align`, inline `style`, and the base64 `data:image` URIs the
+  DevOps editor pastes. This half is the one that catches over-tightening: an
+  earlier `ALLOWED_URI_REGEXP` silently stripped table attributes, and only
+  these tests found it.
+* *Mentions* — that `@mentions` are wrapped in prose, that they are left alone
+  inside links and code blocks, and that a mention inside an attribute value is
+  no longer rewritten.
+
+When changing the allowlist, add a test to both of the first two groups: one
+proving the new vector is blocked, one proving the content you meant to keep
+still renders.
 
 === Integration Tests
 

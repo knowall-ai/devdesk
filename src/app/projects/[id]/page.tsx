@@ -19,6 +19,14 @@ interface ProjectWithSLA extends Organization {
   isTemplateSupported?: boolean;
 }
 
+/**
+ * Project detail page: the project's SLA and settings, plus its epics.
+ *
+ * Epic descriptions arrive from Azure DevOps as HTML. The preview beneath each
+ * epic title is a plain-text summary — `htmlToPlainText` decodes the entities
+ * and truncates against the *text* length, so it renders as a text node rather
+ * than through an HTML sink (issue #413).
+ */
 export default function ProjectDetailPage() {
   const { data: session, status } = useSession();
   const router = useRouter();

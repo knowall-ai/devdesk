@@ -34,6 +34,7 @@ interface WorkItemDetailContentProps {
   processTemplate?: string;
 }
 
+/** Format an hours value for display, dropping a trailing `.0`. */
 const formatHours = (hours: number) => {
   // Whole hours read cleanly as "8"; anything else keeps one decimal so a
   // half-hour estimate isn't rounded away (StandupKanbanCard does the same).
@@ -41,6 +42,7 @@ const formatHours = (hours: number) => {
   return hours.toFixed(1);
 };
 
+/** The Resolution field: read-only sanitised HTML, or an editor when editing. */
 function ResolutionField({
   workItem,
   onUpdate,
@@ -152,6 +154,7 @@ function ResolutionField({
   );
 }
 
+/** The Mitigation field (Risk work items). Plain text, so no HTML sink here. */
 function MitigationField({
   workItem,
   onUpdate,
@@ -258,6 +261,13 @@ function MitigationField({
   );
 }
 
+/**
+ * The body of the work item detail dialog — description, repro steps,
+ * resolution and the type-specific fields around them.
+ *
+ * The rich-text fields hold Azure DevOps HTML and render through `UserHtml`,
+ * which sanitises before the markup reaches the DOM (issue #413).
+ */
 export default function WorkItemDetailContent({
   workItem,
   comments,

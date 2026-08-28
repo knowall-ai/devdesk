@@ -6,7 +6,7 @@ import { Send, Zap, Paperclip, Loader2 } from 'lucide-react';
 import Avatar from '@/components/common/Avatar';
 import UserHtml from '@/components/common/UserHtml';
 import MentionInput from '@/components/common/MentionInput';
-import { rewriteAttachmentUrls, buildAttachmentProxyUrl } from '@/lib/attachment-utils';
+import { buildAttachmentProxyUrl } from '@/lib/attachment-utils';
 import type { TicketComment, User, Attachment } from '@/types';
 
 interface CommentSectionProps {
@@ -22,6 +22,12 @@ interface CommentSectionProps {
   isTicket?: boolean;
 }
 
+/**
+ * The comment thread on a ticket or work item, plus the composer beneath it.
+ *
+ * Comment bodies are Azure DevOps HTML and render through `UserHtml`, which
+ * sanitises them and highlights `@mentions` (issue #413).
+ */
 export default function CommentSection({
   comments,
   isLoading = false,
