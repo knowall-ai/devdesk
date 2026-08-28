@@ -52,9 +52,10 @@ the docblock.
   DevOps editor pastes. This half is the one that catches over-tightening: an
   earlier `ALLOWED_URI_REGEXP` silently stripped table attributes, and only
   these tests found it.
-* *Inline CSS* — that fetching functions and `position: fixed|absolute|sticky`
-  are dropped from a `style` attribute while the colours, fonts, spacing and
-  borders beside them survive. DOMPurify does not read CSS, so this group covers
+* *Inline CSS* — that fetching functions, every `position`, the other routes out
+  of the box (`z-index`, `transform`, `float`, `inset`, `opacity`, …) and
+  negative margins are dropped from a `style` attribute, while the colours,
+  fonts, spacing and borders beside them survive. DOMPurify does not read CSS, so this group covers
   code that is entirely ours.
 +
 NOTE: One case is weaker under `jsdom` than it looks. `sanitizeStyle` defends

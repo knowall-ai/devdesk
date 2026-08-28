@@ -193,12 +193,15 @@ describe('inline style', () => {
     expect(out).toContain('border');
   });
 
-  it('keeps gradients and calc, which paint locally and cannot fetch', () => {
-    const out = sanitizeUserHtml(
-      '<span style="background-image: linear-gradient(red, blue); width: calc(100% - 10px)">x</span>'
-    );
-    expect(out).toContain('linear-gradient');
-    expect(out).toContain('calc');
+  it('keeps calc, which computes locally', () => {
+    expect(sanitizeUserHtml('<span style="width: calc(100% - 10px)">x</span>')).toContain('calc');
+  });
+
+  it('drops background-image outright — only the colour is formatting', () => {
+    expect(
+      sanitizeUserHtml('<span style="background-image: linear-gradient(red, blue)">x</span>')
+    ).not.toContain('gradient');
+    expect(sanitizeUserHtml('<span style="background-color: yellow">x</span>')).toContain('yellow');
   });
 
   it('drops url() — a background image is a beacon reporting who opened the ticket', () => {
@@ -218,17 +221,43 @@ describe('inline style', () => {
     expect(out).toContain('font-size: 12px');
   });
 
-  it('drops position fixed, absolute and sticky — an overlay over the real controls', () => {
+  it('drops every position, relative included', () => {
+    // relative + offsets + z-index overlaps the neighbours just as well as
+    // fixed does. Blocking only fixed/absolute/sticky left that route open.
     const fixed = sanitizeUserHtml(
       '<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh">x</div>'
     );
     expect(fixed).not.toContain('position');
-    expect(sanitizeUserHtml('<div style="position:absolute">x</div>')).not.toContain('position');
-    expect(sanitizeUserHtml('<div style="position:sticky">x</div>')).not.toContain('position');
+    expect(fixed).not.toContain('top');
+    for (const value of ['absolute', 'sticky', 'relative', 'static']) {
+      expect(sanitizeUserHtml(`<div style="position:${value}">x</div>`)).not.toContain('position');
+    }
   });
 
-  it('keeps position:relative, which cannot escape the comment box', () => {
-    expect(sanitizeUserHtml('<span style="position: relative">x</span>')).toContain('relative');
+  it('drops the other ways out of the box', () => {
+    const cases = [
+      'z-index: 9999',
+      'transform: translate(-500px, -500px)',
+      'float: left',
+      'opacity: 0',
+      'pointer-events: none',
+      'clip-path: inset(0)',
+      'mix-blend-mode: difference',
+      'overflow: visible',
+      'inset: 0',
+    ];
+    for (const declaration of cases) {
+      const property = declaration.split(':')[0];
+      expect(sanitizeUserHtml(`<div style="${declaration}">x</div>`)).not.toContain(property);
+    }
+  });
+
+  it('drops a negative margin, the last way to shift over a neighbour', () => {
+    expect(sanitizeUserHtml('<div style="margin-left: -400px">x</div>')).not.toContain('-400px');
+    expect(sanitizeUserHtml('<div style="margin: -10px -20px">x</div>')).not.toContain('margin');
+    expect(sanitizeUserHtml('<div style="text-indent: -999px">x</div>')).not.toContain('indent');
+    // A positive one is ordinary formatting and stays.
+    expect(sanitizeUserHtml('<div style="margin-left: 20px">x</div>')).toContain('20px');
   });
 
   it('drops the legacy execution vectors', () => {

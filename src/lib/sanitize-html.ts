@@ -166,11 +166,63 @@ const SAFE_CSS_FUNCTIONS = new Set([
 const CSS_FUNCTION = /([\w-]+)\s*\(/g;
 
 /**
- * `position` values that lift an element clear of the comment it lives in.
+ * Properties an inline `style` may set: the formatting the DevOps editor emits,
+ * and nothing else.
  *
- * `relative` and `static` stay: they cannot escape the comment's box.
+ * An allowlist, for the same reason the function list is one — it fails closed.
+ * The alternative, naming the properties that let content escape its box, is a
+ * list that is never finished. Blocking `position` alone is not enough:
+ * `position: relative` with offsets and a `z-index` overlaps its neighbours
+ * just as well, and `transform`, `float`, `clip-path`, `pointer-events` and
+ * `opacity` each reach the same end by another route. A comment should be able
+ * to say something in bold, not to decide where it sits relative to the
+ * controls around it.
+ *
+ * Matched by prefix, because the CSSOM expands shorthands: `border` arrives as
+ * `border-top-width`, `border-style`, `border-image` and a dozen more, all of
+ * which this admits. `border-image-source: url(…)` is admitted here and then
+ * rejected by {@link SAFE_CSS_FUNCTIONS}, which is the point of running both.
  */
-const ESCAPING_POSITION = /^(?:fixed|absolute|sticky)$/i;
+const ALLOWED_CSS_PREFIXES = [
+  'background-color',
+  'border',
+  'color',
+  'direction',
+  'font',
+  'height',
+  'letter-spacing',
+  'line-height',
+  'list-style',
+  'margin',
+  'max-height',
+  'max-width',
+  'min-height',
+  'min-width',
+  'padding',
+  'text-align',
+  'text-decoration',
+  'text-indent',
+  'text-transform',
+  'vertical-align',
+  'white-space',
+  'width',
+  'word-break',
+  'word-spacing',
+  'word-wrap',
+];
+
+/**
+ * A negative length, which is the one way a permitted property still shifts
+ * content over its neighbours.
+ *
+ * Spacing is allowed because pasted content is full of it, but a negative
+ * margin pulls an element across whatever sits beside it — the overlay again,
+ * by the only route the allowlist leaves open.
+ */
+const NEGATIVE_LENGTH = /(?:^|[\s(,])-\s*\.?\d/;
+
+/** Properties where a negative value moves the element rather than sizing it. */
+const SHIFTING_PROPERTIES = ['margin', 'text-indent'];
 
 /**
  * An inert document used to parse untrusted CSS.
@@ -199,9 +251,10 @@ function getCssProbe(): HTMLElement {
  * - *Fetching.* A `background-image` on an attacker's host turns opening a
  *   ticket into a beacon reporting who read it and when, from inside an
  *   authenticated session.
- * - *Escaping the comment.* `position: fixed` lets an element cover the page —
- *   an overlay over the real controls, drawn by someone whose only privilege
- *   is commenting on a work item.
+ * - *Escaping the comment.* Positioning lets an element cover the page — an
+ *   overlay over the real controls, drawn by someone whose only privilege is
+ *   commenting on a work item. `position` is the obvious route and not the only
+ *   one, which is why the properties are an allowlist too.
  *
  * **The value is parsed before it is judged.** An earlier version matched the
  * raw text, which a CSS escape walks straight past: `u\72 l(…)` is not the
@@ -210,6 +263,10 @@ function getCssProbe(): HTMLElement {
  * will later render it, so the policy sees what the browser sees — resolved,
  * normalised, shorthands expanded. Anything the parser rejects outright never
  * reaches the output at all.
+ *
+ * Two allowlists run over the parsed declarations — {@link ALLOWED_CSS_PREFIXES}
+ * for the property, {@link SAFE_CSS_FUNCTIONS} for any function in its value —
+ * plus a check for the negative lengths that shift an element sideways.
  *
  * Colours, fonts, alignment, spacing, borders and cell widths — everything the
  * DevOps editor emits — survive, normalised by the parser (`#ff0000` comes back
@@ -240,7 +297,15 @@ function sanitizeStyle(value: string): string {
       }
     }
 
-    if (!unsafe && name === 'position' && ESCAPING_POSITION.test(parsed.trim())) unsafe = true;
+    if (!unsafe && !ALLOWED_CSS_PREFIXES.some((prefix) => name.startsWith(prefix))) unsafe = true;
+
+    if (
+      !unsafe &&
+      SHIFTING_PROPERTIES.some((prefix) => name.startsWith(prefix)) &&
+      NEGATIVE_LENGTH.test(parsed)
+    ) {
+      unsafe = true;
+    }
 
     if (unsafe) probe.style.removeProperty(name);
   }

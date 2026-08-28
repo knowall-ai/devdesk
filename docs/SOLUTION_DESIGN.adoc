@@ -268,10 +268,17 @@ so the value going back to Azure DevOps is cleaned too.
 ticket into a beacon reporting who read it and when, from inside an
 authenticated session.
 
-|`position: fixed` / `absolute` / `sticky`
-|Lifts an element out of the comment so it can cover the page — an overlay over
-the real controls, drawn by someone whose only privilege is commenting on a
-work item.
+|Any property outside the formatting set — `position` (all of them), `z-index`,
+`transform`, `float`, `inset`, `opacity`, `pointer-events`, …
+|Positioning lets an element cover the page — an overlay over the real controls,
+drawn by someone whose only privilege is commenting on a work item. `position:
+relative` with offsets and a `z-index` does this as well as `fixed` does, which
+is why the properties are an allowlist rather than a list of the bad ones.
+
+|A negative length on `margin` or `text-indent`
+|Spacing is allowed because pasted content is full of it, but a negative margin
+pulls an element across whatever sits beside it — the same overlay, by the only
+route the property allowlist leaves open.
 |===
 +
 *The value is parsed before it is judged.* Matching the raw attribute text is
@@ -283,11 +290,14 @@ first — escapes resolved, shorthands expanded, values normalised, and anything
 the parser rejects gone before the policy runs. The element is never attached
 and never rendered, so parsing fetches nothing.
 +
-*The function list is an allowlist, so it fails closed.* Blocklisting the
-fetching functions known today means the next one CSS gains is admitted by
-default, and the whole point of this pass is that CSS can fetch. Colours,
-arithmetic (`calc`, `var`, `clamp`), gradients and transforms are permitted
-because they compute locally; everything else takes its declaration with it.
+*Both lists are allowlists, so they fail closed.* Naming the properties and
+functions that are dangerous today means whatever CSS gains next is admitted by
+default — and the whole point of this pass is that CSS can fetch and can
+reposition. So a declaration survives only if its property is formatting
+(`ALLOWED_CSS_PREFIXES` — colours, fonts, text, spacing, borders, sizing,
+matched by prefix because the parser expands shorthands) *and* every function in
+its value computes locally (`SAFE_CSS_FUNCTIONS` — colours, arithmetic).
+Anything else takes its declaration with it.
 +
 Colours, fonts, alignment, spacing, borders and cell widths — everything the
 DevOps editor emits — survive, normalised by the parser (`#ff0000` comes back
