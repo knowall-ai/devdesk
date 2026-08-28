@@ -52,6 +52,73 @@ describe('sanitizeUserHtml', () => {
     expect(out).not.toContain('btn-primary');
   });
 
+  describe('inline style', () => {
+    // DOMPurify is an HTML sanitiser, not a CSS one — it passes the declaration
+    // list through untouched, so sanitizeStyle does this half.
+
+    it('keeps the declarations the DevOps editor actually emits', () => {
+      const html =
+        '<span style="color: #ff0000; background-color: yellow; font-weight: bold;' +
+        ' text-align: center; padding: 4px; border: 1px solid #ccc">x</span>';
+      const out = sanitizeUserHtml(html);
+      expect(out).toContain('color: #ff0000');
+      expect(out).toContain('background-color: yellow');
+      expect(out).toContain('font-weight: bold');
+      expect(out).toContain('text-align: center');
+      expect(out).toContain('border: 1px solid #ccc');
+    });
+
+    it('drops url() — a background image is a beacon reporting who opened the ticket', () => {
+      const out = sanitizeUserHtml(
+        '<span style="background-image: url(https://evil.test/beacon.png)">x</span>'
+      );
+      expect(out).not.toContain('evil.test');
+      expect(out).not.toContain('url(');
+    });
+
+    it('drops url() while keeping the safe declarations beside it', () => {
+      const out = sanitizeUserHtml(
+        '<span style="color: red; background: url(https://evil.test/b.png); font-size: 12px">x</span>'
+      );
+      expect(out).not.toContain('evil.test');
+      expect(out).toContain('color: red');
+      expect(out).toContain('font-size: 12px');
+    });
+
+    it('drops position:fixed and absolute — an overlay over the real controls', () => {
+      const fixed = sanitizeUserHtml(
+        '<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh">x</div>'
+      );
+      expect(fixed).not.toContain('position');
+      expect(sanitizeUserHtml('<div style="position:absolute">x</div>')).not.toContain('position');
+    });
+
+    it('keeps position:relative, which is not an escape from the comment', () => {
+      expect(sanitizeUserHtml('<span style="position: relative">x</span>')).toContain('relative');
+    });
+
+    it('drops the legacy execution vectors', () => {
+      expect(sanitizeUserHtml('<span style="width: expression(alert(1))">x</span>')).not.toContain(
+        'expression'
+      );
+      expect(
+        sanitizeUserHtml('<span style="-moz-binding: url(http://evil.test/x.xml#e)">x</span>')
+      ).not.toContain('moz-binding');
+    });
+
+    it('removes the attribute outright when nothing survives', () => {
+      const out = sanitizeUserHtml(
+        '<span style="background: url(https://evil.test/b.png)">x</span>'
+      );
+      expect(out).toBe('<span>x</span>');
+    });
+
+    it('is not fooled by casing or whitespace', () => {
+      expect(sanitizeUserHtml('<span style="BACKGROUND: URL( /x )">x</span>')).not.toContain('URL');
+      expect(sanitizeUserHtml('<span style="position :  FIXED">x</span>')).not.toContain('FIXED');
+    });
+  });
+
   it('keeps the text inside a stripped tag', () => {
     expect(sanitizeUserHtml('<marquee>still readable</marquee>')).toContain('still readable');
   });

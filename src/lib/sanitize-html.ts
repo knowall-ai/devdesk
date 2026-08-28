@@ -61,11 +61,15 @@ const ALLOWED_TAGS = [
 
 /**
  * `style` is allowed because DevOps inlines colours and alignment on spans and
- * table cells, and dropping it mangles pasted content. DOMPurify parses the
- * declaration list and removes anything that can fetch or execute, so this is
- * not a hole — but note `class` is *not* allowed: our own stylesheet gives
- * meaning to class names, and letting comment authors set them would let them
- * borrow UI chrome they should not have.
+ * table cells, and dropping it mangles pasted content.
+ *
+ * DOMPurify does *not* help here: it is an HTML sanitiser, not a CSS one, and
+ * passes the declaration list through untouched. `sanitizeStyle` below does
+ * that half of the job.
+ *
+ * `class` is *not* allowed: our own stylesheet gives meaning to class names,
+ * and letting comment authors set them would let them borrow UI chrome they
+ * should not have.
  */
 const ALLOWED_ATTR = [
   'align',
@@ -107,14 +111,61 @@ const SAFE_URI = /^(?:https?:|mailto:|tel:|data:image\/(?:png|jpe?g|gif|webp);ba
 /** Attributes whose value is fetched or navigated to. */
 const URI_ATTRS = ['href', 'src'] as const;
 
+/**
+ * Declarations dropped from an inline `style`.
+ *
+ * DOMPurify is an HTML sanitiser and leaves CSS alone, so this is ours to do.
+ * Nothing here executes script in a current browser — the risks are quieter:
+ *
+ * - `url(…)` fetches. A `background-image` pointing at an attacker's host turns
+ *   opening a ticket into a beacon that reports who read it and when, from
+ *   inside an authenticated session. `expression()` and `-moz-binding` did
+ *   execute, in browsers no longer in service; they are cheap to keep out.
+ * - `position: fixed|absolute` lifts an element out of the comment and lets it
+ *   cover the page — an overlay over the real controls, drawn by someone whose
+ *   only privilege is commenting on a work item.
+ *
+ * Everything the DevOps editor actually emits — colours, fonts, alignment,
+ * spacing, borders, cell widths — is untouched by this.
+ */
+const UNSAFE_DECLARATION =
+  /(?:^|[\s;])(?:position\s*:\s*(?:fixed|absolute)|[^;]*(?:url\s*\(|expression\s*\(|-moz-binding))/i;
+
+/**
+ * Drop the dangerous declarations from an inline `style`, keeping the rest.
+ *
+ * Splitting on `;` is enough because the declarations that survive are simple
+ * property/value pairs; anything containing a function call that could hide a
+ * `;` is exactly what gets dropped.
+ *
+ * @param value The raw `style` attribute value.
+ * @returns The value with unsafe declarations removed — empty if none survive.
+ */
+function sanitizeStyle(value: string): string {
+  const kept = value
+    .split(';')
+    .map((declaration) => declaration.trim())
+    .filter((declaration) => declaration.length > 0 && !UNSAFE_DECLARATION.test(declaration));
+
+  return kept.length > 0 ? `${kept.join('; ')};` : '';
+}
+
 let hooked = false;
 
 /**
- * Force every surviving link to open safely.
+ * Install the attribute pass DOMPurify does not do for us.
  *
- * `target="_blank"` without `rel="noopener"` hands the opened page a live
- * `window.opener` reference back to ZapDesk. DevOps content routinely carries
- * `target`, so rather than dropping it we normalise it.
+ * Three jobs, all on attributes DOMPurify has already decided to keep:
+ *
+ * - Reject `href`/`src` values whose protocol is not on {@link SAFE_URI}.
+ * - Strip the dangerous declarations from inline `style` — see
+ *   {@link UNSAFE_DECLARATION}, since DOMPurify does not read CSS.
+ * - Force every surviving link to open safely. `target="_blank"` without
+ *   `rel="noopener"` hands the opened page a live `window.opener` reference
+ *   back to ZapDesk, and DevOps content routinely carries `target`, so rather
+ *   than dropping it we normalise it.
+ *
+ * Idempotent: the hook is registered once per module instance.
  */
 function installHooks(): void {
   if (hooked) return;
@@ -126,6 +177,12 @@ function installHooks(): void {
       // still javascript: once the browser parses the URL.
       const normalised = value.replace(/[\u0000-\u0020]/g, '');
       if (!SAFE_URI.test(normalised)) node.removeAttribute(attr);
+    }
+    const style = node.getAttribute?.('style');
+    if (style) {
+      const safe = sanitizeStyle(style);
+      if (safe) node.setAttribute('style', safe);
+      else node.removeAttribute('style');
     }
     if (node.tagName === 'A' && node.hasAttribute('href')) {
       node.setAttribute('target', '_blank');

@@ -249,10 +249,36 @@ so the value going back to Azure DevOps is cleaned too.
 ==== Allowlist decisions
 
 * *`style` is allowed, `class` is not.* DevOps inlines colours and alignment on
-  spans and table cells, and dropping `style` mangles pasted content; DOMPurify
-  parses the declaration list and removes anything that can fetch or execute.
-  `class` is different — our own stylesheet gives class names meaning, and a
-  comment author should not be able to borrow UI chrome.
+  spans and table cells, and dropping `style` mangles pasted content. `class` is
+  different — our own stylesheet gives class names meaning, and a comment author
+  should not be able to borrow UI chrome.
+* *Inline CSS is filtered by us, not by DOMPurify.* DOMPurify is an HTML
+  sanitiser, not a CSS one, and passes a declaration list through untouched.
+  `sanitizeStyle` drops the dangerous declarations and keeps the rest.
+  Nothing it removes executes script in a current browser — the risks are
+  quieter than XSS, which is exactly why they are easy to miss:
++
+[cols="1,3"]
+|===
+|Dropped |Why
+
+|`url(…)`
+|Fetches. A `background-image` pointing at an attacker's host turns opening a
+ticket into a beacon reporting who read it and when, from inside an
+authenticated session.
+
+|`position: fixed` / `absolute`
+|Lifts an element out of the comment so it can cover the page — an overlay over
+the real controls, drawn by someone whose only privilege is commenting on a
+work item.
+
+|`expression(…)`, `-moz-binding`
+|Did execute, in browsers no longer in service. Cheap to keep out.
+|===
++
+Colours, fonts, alignment, spacing, borders and cell widths — everything the
+DevOps editor actually emits — are untouched. If every declaration is dropped,
+the attribute is removed rather than left empty.
 * *Links are forced to `rel="noopener noreferrer nofollow"`.* `target="_blank"`
   without `noopener` hands the opened page a live `window.opener` back to
   ZapDesk, and DevOps content routinely carries `target`.

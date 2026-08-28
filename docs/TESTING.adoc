@@ -41,7 +41,7 @@ the docblock.
 ==== HTML sanitisation coverage
 
 `src/lib/sanitize-html.test.ts` covers the boundary described in
-`SOLUTION_DESIGN.adoc` under _Rendering Work Item HTML_, in three groups:
+`SOLUTION_DESIGN.adoc` under _Rendering Work Item HTML_, in four groups:
 
 * *Vectors that must not survive* — `<script>`, inline event handlers
   (`onerror`, `onclick`), `javascript:` URLs including control-character
@@ -52,6 +52,10 @@ the docblock.
   DevOps editor pastes. This half is the one that catches over-tightening: an
   earlier `ALLOWED_URI_REGEXP` silently stripped table attributes, and only
   these tests found it.
+* *Inline CSS* — that `url()`, `position: fixed|absolute`, `expression()` and
+  `-moz-binding` are dropped from a `style` attribute while the colours, fonts,
+  spacing and borders beside them survive. DOMPurify does not read CSS, so this
+  group covers code that is entirely ours.
 * *Mentions* — that `@mentions` are wrapped in prose, that they are left alone
   inside links and code blocks, and that a mention inside an attribute value is
   no longer rewritten.
@@ -66,7 +70,7 @@ Integration tests for API routes.
 
 [source,bash]
 ----
-npm run test:integration
+bun run test:integration
 ----
 
 === End-to-End Tests
@@ -75,7 +79,7 @@ Playwright tests for full user flows.
 
 [source,bash]
 ----
-npm run test:e2e
+bun run test:e2e
 ----
 
 == Running Tests
@@ -85,13 +89,13 @@ npm run test:e2e
 1. Install dependencies:
 [source,bash]
 ----
-npm install
+bun install
 ----
 
 2. Install Playwright browsers:
 [source,bash]
 ----
-npx playwright install
+bunx playwright install
 ----
 
 3. Set up test environment:
@@ -104,7 +108,7 @@ cp .env.example .env.test
 
 [source,bash]
 ----
-npm test
+bun run test
 ----
 
 === Run Specific Tests
@@ -112,16 +116,16 @@ npm test
 [source,bash]
 ----
 # Unit tests only
-npm run test:unit
+bun run test:unit
 
 # Integration tests only
-npm run test:integration
+bun run test:integration
 
 # E2E tests only
-npm run test:e2e
+bun run test:e2e
 
 # Specific test file
-npx playwright test tests/tickets.spec.ts
+bunx playwright test tests/tickets.spec.ts
 ----
 
 == Manual Testing Checklist
@@ -274,14 +278,14 @@ CI tests use:
 
 [source,bash]
 ----
-npx playwright test --ui
+bunx playwright test --ui
 ----
 
 === Debug Mode
 
 [source,bash]
 ----
-npx playwright test --debug
+bunx playwright test --debug
 ----
 
 === Test Report
@@ -290,7 +294,7 @@ View HTML test report:
 
 [source,bash]
 ----
-npx playwright show-report
+bunx playwright show-report
 ----
 
 == Performance Testing
