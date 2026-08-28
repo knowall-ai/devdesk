@@ -112,42 +112,142 @@ const SAFE_URI = /^(?:https?:|mailto:|tel:|data:image\/(?:png|jpe?g|gif|webp);ba
 const URI_ATTRS = ['href', 'src'] as const;
 
 /**
- * Declarations dropped from an inline `style`.
+ * CSS functions an inline `style` may use.
  *
- * DOMPurify is an HTML sanitiser and leaves CSS alone, so this is ours to do.
- * Nothing here executes script in a current browser — the risks are quieter:
+ * An allowlist rather than a blocklist, so it fails closed: a value containing
+ * any function outside this set has its declaration dropped. Blocklisting the
+ * fetching functions known today (`url`, `image-set`, `cross-fade`, `element`,
+ * `paint`, …) means the next one CSS gains is admitted by default, and the
+ * whole point of this pass is that CSS can fetch.
  *
- * - `url(…)` fetches. A `background-image` pointing at an attacker's host turns
- *   opening a ticket into a beacon that reports who read it and when, from
- *   inside an authenticated session. `expression()` and `-moz-binding` did
- *   execute, in browsers no longer in service; they are cheap to keep out.
- * - `position: fixed|absolute` lifts an element out of the comment and lets it
- *   cover the page — an overlay over the real controls, drawn by someone whose
- *   only privilege is commenting on a work item.
- *
- * Everything the DevOps editor actually emits — colours, fonts, alignment,
- * spacing, borders, cell widths — is untouched by this.
+ * Everything here computes a value locally. None of it can reach the network.
  */
-const UNSAFE_DECLARATION =
-  /(?:^|[\s;])(?:position\s*:\s*(?:fixed|absolute)|[^;]*(?:url\s*\(|expression\s*\(|-moz-binding))/i;
+const SAFE_CSS_FUNCTIONS = new Set([
+  // Colour
+  'rgb',
+  'rgba',
+  'hsl',
+  'hsla',
+  'hwb',
+  'lab',
+  'lch',
+  'oklab',
+  'oklch',
+  'color',
+  'color-mix',
+  // Arithmetic
+  'calc',
+  'min',
+  'max',
+  'clamp',
+  'var',
+  // Gradients — painted locally, no fetch
+  'linear-gradient',
+  'radial-gradient',
+  'conic-gradient',
+  'repeating-linear-gradient',
+  'repeating-radial-gradient',
+  'repeating-conic-gradient',
+  // Transforms
+  'translate',
+  'translateX',
+  'translateY',
+  'scale',
+  'scaleX',
+  'scaleY',
+  'rotate',
+  'skew',
+  'skewX',
+  'skewY',
+  'matrix',
+]);
+
+/** Function tokens in a CSS value: the identifier immediately before a `(`. */
+const CSS_FUNCTION = /([\w-]+)\s*\(/g;
+
+/**
+ * `position` values that lift an element clear of the comment it lives in.
+ *
+ * `relative` and `static` stay: they cannot escape the comment's box.
+ */
+const ESCAPING_POSITION = /^(?:fixed|absolute|sticky)$/i;
+
+/**
+ * An inert document used to parse untrusted CSS.
+ *
+ * Parsing has to happen through the CSSOM (see {@link sanitizeStyle}), which
+ * means assigning the value to a real element. Doing that in an inert document
+ * — never attached, never rendered — means nothing is fetched or laid out on
+ * the way through.
+ */
+let cssProbe: HTMLElement | null = null;
+
+function getCssProbe(): HTMLElement {
+  if (!cssProbe) {
+    cssProbe = document.implementation.createHTMLDocument('').createElement('span');
+  }
+  return cssProbe;
+}
 
 /**
  * Drop the dangerous declarations from an inline `style`, keeping the rest.
  *
- * Splitting on `;` is enough because the declarations that survive are simple
- * property/value pairs; anything containing a function call that could hide a
- * `;` is exactly what gets dropped.
+ * DOMPurify is an HTML sanitiser and leaves CSS alone, so this half is ours.
+ * Nothing removed here executes script in a current browser, which is why the
+ * gap is easy to miss — the risks are quieter than XSS:
+ *
+ * - *Fetching.* A `background-image` on an attacker's host turns opening a
+ *   ticket into a beacon reporting who read it and when, from inside an
+ *   authenticated session.
+ * - *Escaping the comment.* `position: fixed` lets an element cover the page —
+ *   an overlay over the real controls, drawn by someone whose only privilege
+ *   is commenting on a work item.
+ *
+ * **The value is parsed before it is judged.** An earlier version matched the
+ * raw text, which a CSS escape walks straight past: `u\72 l(…)` is not the
+ * string `url(` but the browser resolves it to one, and `\66 ixed` resolves to
+ * `fixed`. Assigning to `cssText` hands the parsing to the same engine that
+ * will later render it, so the policy sees what the browser sees — resolved,
+ * normalised, shorthands expanded. Anything the parser rejects outright never
+ * reaches the output at all.
+ *
+ * Colours, fonts, alignment, spacing, borders and cell widths — everything the
+ * DevOps editor emits — survive, normalised by the parser (`#ff0000` comes back
+ * as `rgb(255, 0, 0)`).
  *
  * @param value The raw `style` attribute value.
- * @returns The value with unsafe declarations removed — empty if none survive.
+ * @returns The parsed value with unsafe declarations removed — empty if none
+ *   survive, so the caller can drop the attribute rather than leave it blank.
  */
 function sanitizeStyle(value: string): string {
-  const kept = value
-    .split(';')
-    .map((declaration) => declaration.trim())
-    .filter((declaration) => declaration.length > 0 && !UNSAFE_DECLARATION.test(declaration));
+  const probe = getCssProbe();
+  probe.style.cssText = value;
 
-  return kept.length > 0 ? `${kept.join('; ')};` : '';
+  // Snapshot the names: removeProperty shifts the live list underneath us.
+  const names: string[] = [];
+  for (let i = 0; i < probe.style.length; i++) names.push(probe.style.item(i));
+
+  for (const name of names) {
+    const parsed = probe.style.getPropertyValue(name);
+
+    CSS_FUNCTION.lastIndex = 0;
+    let unsafe = false;
+    let match: RegExpExecArray | null;
+    while ((match = CSS_FUNCTION.exec(parsed)) !== null) {
+      if (!SAFE_CSS_FUNCTIONS.has(match[1])) {
+        unsafe = true;
+        break;
+      }
+    }
+
+    if (!unsafe && name === 'position' && ESCAPING_POSITION.test(parsed.trim())) unsafe = true;
+
+    if (unsafe) probe.style.removeProperty(name);
+  }
+
+  const out = probe.style.cssText;
+  probe.style.cssText = '';
+  return out;
 }
 
 let hooked = false;

@@ -52,10 +52,18 @@ the docblock.
   DevOps editor pastes. This half is the one that catches over-tightening: an
   earlier `ALLOWED_URI_REGEXP` silently stripped table attributes, and only
   these tests found it.
-* *Inline CSS* — that `url()`, `position: fixed|absolute`, `expression()` and
-  `-moz-binding` are dropped from a `style` attribute while the colours, fonts,
-  spacing and borders beside them survive. DOMPurify does not read CSS, so this
-  group covers code that is entirely ours.
+* *Inline CSS* — that fetching functions and `position: fixed|absolute|sticky`
+  are dropped from a `style` attribute while the colours, fonts, spacing and
+  borders beside them survive. DOMPurify does not read CSS, so this group covers
+  code that is entirely ours.
++
+NOTE: One case is weaker under `jsdom` than it looks. `sanitizeStyle` defends
+against CSS escapes (`u\72 l(…)` resolves to `url(…)` in a browser) by judging
+the *parsed* value. A real browser resolves the escape and the function
+allowlist then rejects it; `jsdom` rejects the escaped declaration at the parser
+and never emits it. Both block the payload, so the assertion holds either way —
+but in this environment it proves the output is safe rather than which half
+stopped it.
 * *Mentions* — that `@mentions` are wrapped in prose, that they are left alone
   inside links and code blocks, and that a mention inside an attribute value is
   no longer rewritten.

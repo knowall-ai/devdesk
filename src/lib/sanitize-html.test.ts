@@ -52,73 +52,6 @@ describe('sanitizeUserHtml', () => {
     expect(out).not.toContain('btn-primary');
   });
 
-  describe('inline style', () => {
-    // DOMPurify is an HTML sanitiser, not a CSS one — it passes the declaration
-    // list through untouched, so sanitizeStyle does this half.
-
-    it('keeps the declarations the DevOps editor actually emits', () => {
-      const html =
-        '<span style="color: #ff0000; background-color: yellow; font-weight: bold;' +
-        ' text-align: center; padding: 4px; border: 1px solid #ccc">x</span>';
-      const out = sanitizeUserHtml(html);
-      expect(out).toContain('color: #ff0000');
-      expect(out).toContain('background-color: yellow');
-      expect(out).toContain('font-weight: bold');
-      expect(out).toContain('text-align: center');
-      expect(out).toContain('border: 1px solid #ccc');
-    });
-
-    it('drops url() — a background image is a beacon reporting who opened the ticket', () => {
-      const out = sanitizeUserHtml(
-        '<span style="background-image: url(https://evil.test/beacon.png)">x</span>'
-      );
-      expect(out).not.toContain('evil.test');
-      expect(out).not.toContain('url(');
-    });
-
-    it('drops url() while keeping the safe declarations beside it', () => {
-      const out = sanitizeUserHtml(
-        '<span style="color: red; background: url(https://evil.test/b.png); font-size: 12px">x</span>'
-      );
-      expect(out).not.toContain('evil.test');
-      expect(out).toContain('color: red');
-      expect(out).toContain('font-size: 12px');
-    });
-
-    it('drops position:fixed and absolute — an overlay over the real controls', () => {
-      const fixed = sanitizeUserHtml(
-        '<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh">x</div>'
-      );
-      expect(fixed).not.toContain('position');
-      expect(sanitizeUserHtml('<div style="position:absolute">x</div>')).not.toContain('position');
-    });
-
-    it('keeps position:relative, which is not an escape from the comment', () => {
-      expect(sanitizeUserHtml('<span style="position: relative">x</span>')).toContain('relative');
-    });
-
-    it('drops the legacy execution vectors', () => {
-      expect(sanitizeUserHtml('<span style="width: expression(alert(1))">x</span>')).not.toContain(
-        'expression'
-      );
-      expect(
-        sanitizeUserHtml('<span style="-moz-binding: url(http://evil.test/x.xml#e)">x</span>')
-      ).not.toContain('moz-binding');
-    });
-
-    it('removes the attribute outright when nothing survives', () => {
-      const out = sanitizeUserHtml(
-        '<span style="background: url(https://evil.test/b.png)">x</span>'
-      );
-      expect(out).toBe('<span>x</span>');
-    });
-
-    it('is not fooled by casing or whitespace', () => {
-      expect(sanitizeUserHtml('<span style="BACKGROUND: URL( /x )">x</span>')).not.toContain('URL');
-      expect(sanitizeUserHtml('<span style="position :  FIXED">x</span>')).not.toContain('FIXED');
-    });
-  });
-
   it('keeps the text inside a stripped tag', () => {
     expect(sanitizeUserHtml('<marquee>still readable</marquee>')).toContain('still readable');
   });
@@ -239,5 +172,126 @@ describe('URL handling', () => {
   it('keeps a base64 image, which DevOps pastes inline', () => {
     const png = 'data:image/png;base64,iVBORw0KGgo=';
     expect(sanitizeUserHtml(`<img src="${png}">`)).toContain(png);
+  });
+});
+
+describe('inline style', () => {
+  // DOMPurify is an HTML sanitiser, not a CSS one — it passes the declaration
+  // list through untouched, so sanitizeStyle does this half. It parses through
+  // the CSSOM first, so the policy judges resolved values, not raw text.
+
+  it('keeps the declarations the DevOps editor actually emits', () => {
+    const out = sanitizeUserHtml(
+      '<span style="color: #ff0000; font-weight: bold; text-align: center;' +
+        ' padding: 4px; border: 1px solid #ccc">x</span>'
+    );
+    // The parser normalises colours, so match on the normalised form.
+    expect(out).toContain('rgb(255, 0, 0)');
+    expect(out).toContain('font-weight: bold');
+    expect(out).toContain('text-align: center');
+    expect(out).toContain('padding: 4px');
+    expect(out).toContain('border');
+  });
+
+  it('keeps gradients and calc, which paint locally and cannot fetch', () => {
+    const out = sanitizeUserHtml(
+      '<span style="background-image: linear-gradient(red, blue); width: calc(100% - 10px)">x</span>'
+    );
+    expect(out).toContain('linear-gradient');
+    expect(out).toContain('calc');
+  });
+
+  it('drops url() — a background image is a beacon reporting who opened the ticket', () => {
+    const out = sanitizeUserHtml(
+      '<span style="background-image: url(https://evil.test/beacon.png)">x</span>'
+    );
+    expect(out).not.toContain('evil.test');
+    expect(out).not.toContain('url(');
+  });
+
+  it('drops url() while keeping the safe declarations beside it', () => {
+    const out = sanitizeUserHtml(
+      '<span style="color: red; background-image: url(https://evil.test/b.png); font-size: 12px">x</span>'
+    );
+    expect(out).not.toContain('evil.test');
+    expect(out).toContain('color: red');
+    expect(out).toContain('font-size: 12px');
+  });
+
+  it('drops position fixed, absolute and sticky — an overlay over the real controls', () => {
+    const fixed = sanitizeUserHtml(
+      '<div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh">x</div>'
+    );
+    expect(fixed).not.toContain('position');
+    expect(sanitizeUserHtml('<div style="position:absolute">x</div>')).not.toContain('position');
+    expect(sanitizeUserHtml('<div style="position:sticky">x</div>')).not.toContain('position');
+  });
+
+  it('keeps position:relative, which cannot escape the comment box', () => {
+    expect(sanitizeUserHtml('<span style="position: relative">x</span>')).toContain('relative');
+  });
+
+  it('drops the legacy execution vectors', () => {
+    expect(sanitizeUserHtml('<span style="width: expression(alert(1))">x</span>')).not.toContain(
+      'expression'
+    );
+    expect(
+      sanitizeUserHtml('<span style="-moz-binding: url(http://evil.test/x.xml#e)">x</span>')
+    ).not.toContain('moz-binding');
+    expect(sanitizeUserHtml('<span style="behavior: url(#default#time2)">x</span>')).not.toContain(
+      'behavior'
+    );
+  });
+
+  it('is not bypassed by a CSS escape, which the browser resolves', () => {
+    // `u\72 l(` is not the string `url(`, but a browser's CSS parser resolves
+    // it to exactly that, and `\66 ixed` resolves to `fixed`. Matching raw
+    // text walked straight past both.
+    //
+    // Both engines block these, by different routes: a browser resolves the
+    // escape and the function allowlist then rejects the `url(` it produced,
+    // while jsdom's parser rejects the escaped form outright and never emits a
+    // declaration. So in this environment the assertion is weaker than it
+    // looks — it proves the output is safe, not which half stopped it.
+    const escapedUrl = sanitizeUserHtml(
+      '<span style="background-image: u\\72 l(https://evil.test/b.png)">x</span>'
+    );
+    expect(escapedUrl).not.toContain('evil.test');
+    expect(escapedUrl).not.toContain('url(');
+
+    const escapedNoSpace = sanitizeUserHtml(
+      '<span style="background-image: u\\72l(https://evil.test/b.png)">x</span>'
+    );
+    expect(escapedNoSpace).not.toContain('evil.test');
+
+    const escapedFixed = sanitizeUserHtml('<div style="position: \\66 ixed">x</div>');
+    expect(escapedFixed).not.toContain('fixed');
+  });
+
+  it('drops an unknown fetching function rather than admitting it by default', () => {
+    // The allowlist fails closed, so a function it has never heard of is out.
+    const imageSet = sanitizeUserHtml(
+      '<span style="background-image: image-set(url(https://evil.test/a.png) 1x)">x</span>'
+    );
+    expect(imageSet).not.toContain('evil.test');
+
+    const webkit = sanitizeUserHtml(
+      '<span style="background-image: -webkit-image-set(url(https://evil.test/a.png) 1x)">x</span>'
+    );
+    expect(webkit).not.toContain('evil.test');
+  });
+
+  it('removes the attribute outright when nothing survives', () => {
+    const out = sanitizeUserHtml(
+      '<span style="background-image: url(https://evil.test/b.png)">x</span>'
+    );
+    expect(out).toBe('<span>x</span>');
+  });
+
+  it('is not fooled by casing or whitespace', () => {
+    expect(
+      sanitizeUserHtml('<span style="BACKGROUND-IMAGE: URL( https://evil.test/a.png )">x</span>')
+    ).not.toContain('evil.test');
+    expect(sanitizeUserHtml('<div style="position :  FIXED">x</div>')).not.toContain('FIXED');
   });
 });
