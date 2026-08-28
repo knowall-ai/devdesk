@@ -109,19 +109,6 @@ function mapStateToStatus(state: string): TicketStatus {
   return 'Open';
 }
 
-// Map Zendesk-like statuses back to Azure DevOps states
-export function mapStatusToState(status: TicketStatus): string {
-  const statusMap: Record<TicketStatus, string> = {
-    New: 'New',
-    Open: 'Active',
-    'In Progress': 'Active',
-    Pending: 'Blocked',
-    Resolved: 'Resolved',
-    Closed: 'Closed',
-  };
-  return statusMap[status] || 'Active';
-}
-
 // All effort estimate fields on Features (all stored in days in Azure DevOps)
 const FEATURE_EFFORT_FIELDS = [
   'Microsoft.VSTS.Scheduling.Effort',
