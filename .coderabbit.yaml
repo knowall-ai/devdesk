@@ -4,10 +4,10 @@ reviews:
     base_branches:
       - main
     drafts: false
-    path_instructions:
-      - path: "src/**"
-        instructions: "Focus on security, validation, and error handling."
-    profile: security
+  path_instructions:
+    - path: "src/**"
+      instructions: "Focus on security, validation, and error handling."
+  profile: chill
   request_changes_workflow: true
   high_level_summary: true
   poem: false
@@ -23,5 +23,4 @@ reviews:
     - "!**/*.json"
     - "!**/package.json"
     - "!**/bun.lock"
-  auto_assign:
-    enabled: false
+  auto_assign_reviewers: false
