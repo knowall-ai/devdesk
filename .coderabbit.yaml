@@ -1,0 +1,27 @@
+reviews:
+  auto_review:
+    enabled: true
+    base_branches:
+      - main
+    drafts: false
+    path_instructions:
+      - path: "src/**"
+        instructions: "Focus on security, validation, and error handling."
+    profile: security
+  request_changes_workflow: true
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  tools:
+    ruff:
+      enabled: false
+    gitleaks:
+      enabled: true
+  path_filters:
+    - "!**/*.md"
+    - "!**/*.json"
+    - "!**/package.json"
+    - "!**/bun.lock"
+  auto_assign:
+    enabled: false

@@ -3,6 +3,15 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { AzureDevOpsService, DevOpsApiError, workItemToTicket } from '@/lib/devops';
 import { isEmailTicket, extractRequesterEmail, sendStatusChangeNotification } from '@/lib/email';
+import {
+  MAX_WORK_ITEM_ID,
+  MAX_PROJECT_LENGTH,
+  MAX_STATE_LENGTH,
+  validateJsonObject,
+  rejectUnknownKeys,
+  validateRequiredString,
+  validateOptionalString,
+} from '@/lib/devops-request-validation';
 
 export async function PATCH(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -13,34 +22,60 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
 
     const { id } = await params;
+    if (!/^[0-9]+$/.test(id)) {
+      return NextResponse.json({ error: 'Invalid ticket ID' }, { status: 400 });
+    }
     const ticketId = parseInt(id, 10);
-
-    if (isNaN(ticketId)) {
+    if (ticketId <= 0 || ticketId > MAX_WORK_ITEM_ID) {
       return NextResponse.json({ error: 'Invalid ticket ID' }, { status: 400 });
     }
 
-    const body = await request.json();
-    const { state } = body;
-
-    if (!state) {
-      return NextResponse.json({ error: 'State is required' }, { status: 400 });
+    let rawBody: unknown;
+    try {
+      rawBody = await request.json();
+    } catch {
+      return NextResponse.json({ error: 'Request body must be JSON' }, { status: 400 });
     }
+
+    const bodyResult = validateJsonObject(rawBody);
+    if (!bodyResult.ok) {
+      return NextResponse.json({ error: bodyResult.error }, { status: bodyResult.status });
+    }
+
+    const keysResult = rejectUnknownKeys(bodyResult.data, ['state', 'project']);
+    if (!keysResult.ok) {
+      return NextResponse.json({ error: keysResult.error }, { status: keysResult.status });
+    }
+
+    const { state: rawState, project: rawProject } = bodyResult.data;
+
+    const stateResult = validateRequiredString(rawState, 'state', MAX_STATE_LENGTH);
+    if (!stateResult.ok) {
+      return NextResponse.json({ error: stateResult.error }, { status: stateResult.status });
+    }
+    const state = stateResult.data;
+
+    const projectResult = validateOptionalString(rawProject, 'project', MAX_PROJECT_LENGTH);
+    if (!projectResult.ok) {
+      return NextResponse.json({ error: projectResult.error }, { status: projectResult.status });
+    }
+    const project = projectResult.data;
 
     const organization = request.headers.get('x-devops-org') || undefined;
     const devopsService = new AzureDevOpsService(session.accessToken, organization);
 
     // If project is provided in the body, use it directly
-    if (body.project) {
+    if (project) {
       // Snapshot old state first so the email shows the transition.
       let oldState: string | undefined;
       try {
-        const existing = await devopsService.getWorkItem(body.project, ticketId);
+        const existing = await devopsService.getWorkItem(project, ticketId);
         oldState = existing?.fields?.['System.State'];
       } catch {
         // Continue without old state — the transition message will say "Unknown".
       }
 
-      const updatedWorkItem = await devopsService.updateTicketState(body.project, ticketId, state);
+      const updatedWorkItem = await devopsService.updateTicketState(project, ticketId, state);
       notifyStateChange(updatedWorkItem, ticketId, oldState || 'Unknown', state);
       const ticket = workItemToTicket(updatedWorkItem);
       return NextResponse.json({ ticket });
