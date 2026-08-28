@@ -54,7 +54,6 @@ interface GraphMessage {
   from?: { emailAddress?: { address?: string; name?: string } };
   /** Only the new content of the message, with quoted thread stripped by Graph. */
   uniqueBody?: { contentType: string; content: string };
-  hasAttachments?: boolean;
   receivedDateTime?: string;
 }
 
@@ -121,13 +120,22 @@ export async function pollMailbox(mailbox: string): Promise<PollSummary> {
     const fromName = message.from?.emailAddress?.name;
     const from = fromName ? `${fromName} <${fromAddress}>` : fromAddress;
 
+    // Fetched unconditionally, and deliberately not gated on
+    // `message.hasAttachments`. Graph documents that flag as excluding inline
+    // attachments, so a message whose only attachment is a pasted screenshot
+    // reports false -- and pasting a screenshot into the body with no file
+    // attached is the single most common way a customer reports a problem.
+    // Gating on it fetched nothing, uploaded nothing, and left a dead `cid:`
+    // reference rendering as a broken image on the ticket.
+    //
+    // The cost is one Graph call per unread message. That is the right trade
+    // for the guarantee this whole path is built around: nothing on an email
+    // disappears from the ticket without being accounted for.
     let attachments: IngestEmailAttachment[] | undefined;
-    if (message.hasAttachments) {
-      try {
-        attachments = await fetchAttachments(token, mailbox, message.id);
-      } catch (err) {
-        console.warn(`[Poll] failed to fetch attachments for ${message.id}:`, err);
-      }
+    try {
+      attachments = await fetchAttachments(token, mailbox, message.id);
+    } catch (err) {
+      console.warn(`[Poll] failed to fetch attachments for ${message.id}:`, err);
     }
 
     const result = await ingestEmail({
@@ -168,7 +176,7 @@ async function listUnread(token: string, mailbox: string): Promise<GraphMessage[
   const url =
     `${GRAPH_BASE_URL}/users/${encodeURIComponent(mailbox)}/mailFolders('Inbox')/messages` +
     `?$filter=isRead eq false` +
-    `&$select=id,subject,from,uniqueBody,hasAttachments,receivedDateTime` +
+    `&$select=id,subject,from,uniqueBody,receivedDateTime` +
     `&$orderby=receivedDateTime desc` +
     `&$top=${MAX_PER_POLL}`;
 
