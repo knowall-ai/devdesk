@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 
-const ingestEmail = vi.fn(async () => ({
+/** Only the part of the ingest payload these tests assert on. */
+interface IngestedEmail {
+  attachments?: Array<{ filename: string }>;
+}
+
+const ingestEmail = vi.fn(async (_email: IngestedEmail) => ({
   success: true as const,
   action: 'ticket_created' as const,
   ticketId: 1,
@@ -8,7 +13,7 @@ const ingestEmail = vi.fn(async () => ({
 }));
 
 vi.mock('./email', () => ({ getMailGraphToken: async () => 'token' }));
-vi.mock('./email-ingest', () => ({ ingestEmail: (...args: unknown[]) => ingestEmail(...args) }));
+vi.mock('./email-ingest', () => ({ ingestEmail: (email: IngestedEmail) => ingestEmail(email) }));
 
 const { pollMailbox } = await import('./email-poll');
 
@@ -82,7 +87,7 @@ describe('pollMailbox — attachment fetching', () => {
     expect(calls.some((c) => c.includes('/attachments'))).toBe(true);
     expect(summary.ingested).toBe(1);
 
-    const passed = ingestEmail.mock.calls[0][0] as { attachments?: Array<{ filename: string }> };
+    const [passed] = ingestEmail.mock.calls[0];
     expect(passed.attachments?.map((a) => a.filename)).toEqual(['image001.png']);
   });
 
