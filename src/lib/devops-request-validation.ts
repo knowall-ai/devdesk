@@ -72,14 +72,14 @@ export function validateRequiredString(
 }
 
 /**
- * Validate an optional string field (if present, non-empty after trim, max length).
+ * Validate an optional string field (omitted when undefined; if provided, must be a non-empty string after trim, max length).
  */
 export function validateOptionalString(
   value: unknown,
   fieldName: string,
   maxLength: number
 ): ValidationResult<string | undefined> {
-  if (value === undefined || value === null) {
+  if (value === undefined) {
     return { ok: true, data: undefined };
   }
   if (typeof value !== 'string') {
@@ -100,13 +100,13 @@ export function validateOptionalString(
 }
 
 /**
- * Validate an optional boolean field.
+ * Validate an optional boolean field (omitted when undefined; if provided, must be a boolean).
  */
 export function validateOptionalBoolean(
   value: unknown,
   fieldName: string
 ): ValidationResult<boolean | undefined> {
-  if (value === undefined || value === null) {
+  if (value === undefined) {
     return { ok: true, data: undefined };
   }
   if (typeof value !== 'boolean') {

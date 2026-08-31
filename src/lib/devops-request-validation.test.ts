@@ -127,9 +127,13 @@ describe('validateOptionalString', () => {
     expect(result).toEqual({ ok: true, data: undefined });
   });
 
-  it('returns undefined for null input', () => {
+  it('rejects null input', () => {
     const result = validateOptionalString(null, 'project', MAX_PROJECT_LENGTH);
-    expect(result).toEqual({ ok: true, data: undefined });
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+      expect(result.error).toBe('project must be a string');
+    }
   });
 
   it('accepts a valid string', () => {
@@ -159,6 +163,15 @@ describe('validateOptionalBoolean', () => {
   it('returns undefined for undefined input', () => {
     const result = validateOptionalBoolean(undefined, 'isInternal');
     expect(result).toEqual({ ok: true, data: undefined });
+  });
+
+  it('rejects null input', () => {
+    const result = validateOptionalBoolean(null, 'isInternal');
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.status).toBe(400);
+      expect(result.error).toBe('isInternal must be a boolean');
+    }
   });
 
   it('accepts true', () => {
