@@ -5,6 +5,7 @@ import { format } from 'date-fns';
 import { Send, Zap, Paperclip, Loader2 } from 'lucide-react';
 import Avatar from '@/components/common/Avatar';
 import MentionInput from '@/components/common/MentionInput';
+import { highlightMentions } from '@/lib/mentions';
 import { rewriteAttachmentUrls, buildAttachmentProxyUrl } from '@/lib/attachment-utils';
 import type { TicketComment, User, Attachment } from '@/types';
 
@@ -155,7 +156,12 @@ export default function CommentSection({
                   <div
                     className={`user-content ${compact ? 'prose prose-sm prose-invert max-w-none text-sm' : 'text-sm'}`}
                     style={{ color: 'var(--text-secondary)' }}
-                    dangerouslySetInnerHTML={{ __html: rewriteAttachmentUrls(comment.content) }}
+                    // Rewrite first, then highlight — the same order
+                    // TicketDetail uses, so inline screenshots resolve through
+                    // the attachment proxy and mentions are still marked up.
+                    dangerouslySetInnerHTML={{
+                      __html: highlightMentions(rewriteAttachmentUrls(comment.content)),
+                    }}
                   />
                 </div>
               </div>
@@ -195,8 +201,8 @@ export default function CommentSection({
               onPaste={onUploadAttachment ? handlePaste : undefined}
               placeholder={
                 compact
-                  ? 'Add a comment... Paste images with Ctrl+V'
-                  : 'Type your reply... Paste images with Ctrl+V'
+                  ? 'Add a comment... Use @ to mention. Paste images with Ctrl+V'
+                  : 'Type your reply... Use @ to mention. Paste images with Ctrl+V'
               }
               className={`input w-full resize-none ${compact ? 'min-h-[60px] text-sm' : 'min-h-[100px]'}`}
               disabled={isSubmitting || isPastingImage}
