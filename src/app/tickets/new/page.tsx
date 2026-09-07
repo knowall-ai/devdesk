@@ -428,76 +428,37 @@ export default function NewTicketPage() {
             )}
           </div>
 
-          {/* Area */}
-          <div>
-            <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-              Area *
-            </label>
-            {isLoadingAreas ? (
-              <div
-                className="flex items-center gap-2 text-sm"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                <Loader2 className="animate-spin" size={14} />
-                Loading...
-              </div>
-            ) : (
-              <select
-                value={form.areaPath}
-                onChange={(e) => setForm((prev) => ({ ...prev, areaPath: e.target.value }))}
-                className="input w-full"
-                disabled={!form.project || areas.length === 0}
-                required
-              >
-                <option value="">Select area...</option>
-                {areas.map((node) => (
-                  <option key={node.id} value={node.path}>
-                    {node.path}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {/* Iteration */}
-          <div>
-            <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-              Iteration *
-            </label>
-            {isLoadingIterations ? (
-              <div
-                className="flex items-center gap-2 text-sm"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                <Loader2 className="animate-spin" size={14} />
-                Loading...
-              </div>
-            ) : (
-              <select
-                value={form.iterationPath}
-                onChange={(e) => setForm((prev) => ({ ...prev, iterationPath: e.target.value }))}
-                className="input w-full"
-                disabled={!form.project || iterations.length === 0}
-                required
-              >
-                <option value="">Select iteration...</option>
-                {iterations.map((node) => (
-                  <option key={node.id} value={node.path}>
-                    {node.path}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {/* Work Item Type - fixed to Task */}
+          {/* Work Item Type */}
           <div>
             <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
               Type
             </label>
-            <select className="input w-full" disabled>
-              <option>Task</option>
-            </select>
+            {isLoadingTypes ? (
+              <div
+                className="flex items-center gap-2 text-sm"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                <Loader2 className="animate-spin" size={14} />
+                Loading...
+              </div>
+            ) : (
+              <select
+                value={form.workItemType}
+                onChange={(e) => setForm((prev) => ({ ...prev, workItemType: e.target.value }))}
+                className="input w-full"
+                disabled={!form.project || workItemTypes.length === 0}
+              >
+                {workItemTypes.length === 0 ? (
+                  <option value="Task">Task</option>
+                ) : (
+                  workItemTypes.map((type) => (
+                    <option key={type.name} value={type.name}>
+                      {type.name}
+                    </option>
+                  ))
+                )}
+              </select>
+            )}
           </div>
 
           {/* Assignee */}
@@ -575,12 +536,12 @@ export default function NewTicketPage() {
             </select>
           </div>
 
-          {/* Work Item Type */}
+          {/* Area */}
           <div>
             <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-              Type
+              Area *
             </label>
-            {isLoadingTypes ? (
+            {isLoadingAreas ? (
               <div
                 className="flex items-center gap-2 text-sm"
                 style={{ color: 'var(--text-muted)' }}
@@ -590,20 +551,49 @@ export default function NewTicketPage() {
               </div>
             ) : (
               <select
-                value={form.workItemType}
-                onChange={(e) => setForm((prev) => ({ ...prev, workItemType: e.target.value }))}
+                value={form.areaPath}
+                onChange={(e) => setForm((prev) => ({ ...prev, areaPath: e.target.value }))}
                 className="input w-full"
-                disabled={!form.project || workItemTypes.length === 0}
+                disabled={!form.project || areas.length === 0}
+                required
               >
-                {workItemTypes.length === 0 ? (
-                  <option value="Task">Task</option>
-                ) : (
-                  workItemTypes.map((type) => (
-                    <option key={type.name} value={type.name}>
-                      {type.name}
-                    </option>
-                  ))
-                )}
+                <option value="">Select area...</option>
+                {areas.map((node) => (
+                  <option key={node.id} value={node.path}>
+                    {node.path}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Iteration */}
+          <div>
+            <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
+              Iteration *
+            </label>
+            {isLoadingIterations ? (
+              <div
+                className="flex items-center gap-2 text-sm"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                <Loader2 className="animate-spin" size={14} />
+                Loading...
+              </div>
+            ) : (
+              <select
+                value={form.iterationPath}
+                onChange={(e) => setForm((prev) => ({ ...prev, iterationPath: e.target.value }))}
+                className="input w-full"
+                disabled={!form.project || iterations.length === 0}
+                required
+              >
+                <option value="">Select iteration...</option>
+                {iterations.map((node) => (
+                  <option key={node.id} value={node.path}>
+                    {node.path}
+                  </option>
+                ))}
               </select>
             )}
           </div>
