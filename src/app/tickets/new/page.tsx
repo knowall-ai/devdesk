@@ -93,6 +93,11 @@ export default function NewTicketPage() {
   const fetchWorkItemTypes = useCallback(
     async (projectName: string) => {
       setIsLoadingTypes(true);
+      // Drop the previous project's type up front. Leaving it set means a
+      // failed or empty response leaves the form holding a type the new
+      // project may not have -- and fetchRequiredFields is keyed on it, so the
+      // required fields would be fetched for the wrong type too.
+      setForm((prev) => ({ ...prev, workItemType: '' }));
       try {
         const response = await get(
           `/api/devops/projects/${encodeURIComponent(projectName)}/workitemtypes`
@@ -369,6 +374,8 @@ export default function NewTicketPage() {
                 isSubmitting ||
                 !form.project ||
                 !form.subject.trim() ||
+                isLoadingTypes ||
+                !form.workItemType ||
                 !form.iterationPath ||
                 !form.areaPath ||
                 requiredFields.some(
@@ -411,6 +418,7 @@ export default function NewTicketPage() {
                     ...prev,
                     project: e.target.value,
                     assignee: '',
+                    workItemType: '',
                     iterationPath: '',
                     areaPath: '',
                   }))
@@ -448,16 +456,21 @@ export default function NewTicketPage() {
                 className="input w-full"
                 disabled={!form.project || workItemTypes.length === 0}
               >
-                {workItemTypes.length === 0 ? (
-                  <option value="Task">Task</option>
-                ) : (
-                  workItemTypes.map((type) => (
-                    <option key={type.name} value={type.name}>
-                      {type.name}
-                    </option>
-                  ))
-                )}
+                {/* No hardcoded "Task" fallback. Offering a type that is not in
+                    the fetched list is how the form came to submit a type the
+                    project does not have. */}
+                <option value="">Select type...</option>
+                {workItemTypes.map((type) => (
+                  <option key={type.name} value={type.name}>
+                    {type.name}
+                  </option>
+                ))}
               </select>
+            )}
+            {!isLoadingTypes && form.project && workItemTypes.length === 0 && (
+              <p className="mt-1 text-xs" style={{ color: 'var(--priority-urgent)' }}>
+                Could not load work item types for this project. Reselect the project to try again.
+              </p>
             )}
           </div>
 
