@@ -93,6 +93,11 @@ export default function NewTicketPage() {
   const fetchWorkItemTypes = useCallback(
     async (projectName: string) => {
       setIsLoadingTypes(true);
+      // Drop the previous project's type up front. Leaving it set means a
+      // failed or empty response leaves the form holding a type the new
+      // project may not have -- and fetchRequiredFields is keyed on it, so the
+      // required fields would be fetched for the wrong type too.
+      setForm((prev) => ({ ...prev, workItemType: '' }));
       try {
         const response = await get(
           `/api/devops/projects/${encodeURIComponent(projectName)}/workitemtypes`
@@ -369,6 +374,8 @@ export default function NewTicketPage() {
                 isSubmitting ||
                 !form.project ||
                 !form.subject.trim() ||
+                isLoadingTypes ||
+                !form.workItemType ||
                 !form.iterationPath ||
                 !form.areaPath ||
                 requiredFields.some(
@@ -411,6 +418,7 @@ export default function NewTicketPage() {
                     ...prev,
                     project: e.target.value,
                     assignee: '',
+                    workItemType: '',
                     iterationPath: '',
                     areaPath: '',
                   }))
@@ -428,76 +436,42 @@ export default function NewTicketPage() {
             )}
           </div>
 
-          {/* Area */}
-          <div>
-            <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-              Area *
-            </label>
-            {isLoadingAreas ? (
-              <div
-                className="flex items-center gap-2 text-sm"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                <Loader2 className="animate-spin" size={14} />
-                Loading...
-              </div>
-            ) : (
-              <select
-                value={form.areaPath}
-                onChange={(e) => setForm((prev) => ({ ...prev, areaPath: e.target.value }))}
-                className="input w-full"
-                disabled={!form.project || areas.length === 0}
-                required
-              >
-                <option value="">Select area...</option>
-                {areas.map((node) => (
-                  <option key={node.id} value={node.path}>
-                    {node.path}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {/* Iteration */}
-          <div>
-            <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-              Iteration *
-            </label>
-            {isLoadingIterations ? (
-              <div
-                className="flex items-center gap-2 text-sm"
-                style={{ color: 'var(--text-muted)' }}
-              >
-                <Loader2 className="animate-spin" size={14} />
-                Loading...
-              </div>
-            ) : (
-              <select
-                value={form.iterationPath}
-                onChange={(e) => setForm((prev) => ({ ...prev, iterationPath: e.target.value }))}
-                className="input w-full"
-                disabled={!form.project || iterations.length === 0}
-                required
-              >
-                <option value="">Select iteration...</option>
-                {iterations.map((node) => (
-                  <option key={node.id} value={node.path}>
-                    {node.path}
-                  </option>
-                ))}
-              </select>
-            )}
-          </div>
-
-          {/* Work Item Type - fixed to Task */}
+          {/* Work Item Type */}
           <div>
             <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
               Type
             </label>
-            <select className="input w-full" disabled>
-              <option>Task</option>
-            </select>
+            {isLoadingTypes ? (
+              <div
+                className="flex items-center gap-2 text-sm"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                <Loader2 className="animate-spin" size={14} />
+                Loading...
+              </div>
+            ) : (
+              <select
+                value={form.workItemType}
+                onChange={(e) => setForm((prev) => ({ ...prev, workItemType: e.target.value }))}
+                className="input w-full"
+                disabled={!form.project || workItemTypes.length === 0}
+              >
+                {/* No hardcoded "Task" fallback. Offering a type that is not in
+                    the fetched list is how the form came to submit a type the
+                    project does not have. */}
+                <option value="">Select type...</option>
+                {workItemTypes.map((type) => (
+                  <option key={type.name} value={type.name}>
+                    {type.name}
+                  </option>
+                ))}
+              </select>
+            )}
+            {!isLoadingTypes && form.project && workItemTypes.length === 0 && (
+              <p className="mt-1 text-xs" style={{ color: 'var(--priority-urgent)' }}>
+                Could not load work item types for this project. Reselect the project to try again.
+              </p>
+            )}
           </div>
 
           {/* Assignee */}
@@ -575,12 +549,12 @@ export default function NewTicketPage() {
             </select>
           </div>
 
-          {/* Work Item Type */}
+          {/* Area */}
           <div>
             <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
-              Type
+              Area *
             </label>
-            {isLoadingTypes ? (
+            {isLoadingAreas ? (
               <div
                 className="flex items-center gap-2 text-sm"
                 style={{ color: 'var(--text-muted)' }}
@@ -590,20 +564,49 @@ export default function NewTicketPage() {
               </div>
             ) : (
               <select
-                value={form.workItemType}
-                onChange={(e) => setForm((prev) => ({ ...prev, workItemType: e.target.value }))}
+                value={form.areaPath}
+                onChange={(e) => setForm((prev) => ({ ...prev, areaPath: e.target.value }))}
                 className="input w-full"
-                disabled={!form.project || workItemTypes.length === 0}
+                disabled={!form.project || areas.length === 0}
+                required
               >
-                {workItemTypes.length === 0 ? (
-                  <option value="Task">Task</option>
-                ) : (
-                  workItemTypes.map((type) => (
-                    <option key={type.name} value={type.name}>
-                      {type.name}
-                    </option>
-                  ))
-                )}
+                <option value="">Select area...</option>
+                {areas.map((node) => (
+                  <option key={node.id} value={node.path}>
+                    {node.path}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+
+          {/* Iteration */}
+          <div>
+            <label className="mb-1 block text-xs uppercase" style={{ color: 'var(--text-muted)' }}>
+              Iteration *
+            </label>
+            {isLoadingIterations ? (
+              <div
+                className="flex items-center gap-2 text-sm"
+                style={{ color: 'var(--text-muted)' }}
+              >
+                <Loader2 className="animate-spin" size={14} />
+                Loading...
+              </div>
+            ) : (
+              <select
+                value={form.iterationPath}
+                onChange={(e) => setForm((prev) => ({ ...prev, iterationPath: e.target.value }))}
+                className="input w-full"
+                disabled={!form.project || iterations.length === 0}
+                required
+              >
+                <option value="">Select iteration...</option>
+                {iterations.map((node) => (
+                  <option key={node.id} value={node.path}>
+                    {node.path}
+                  </option>
+                ))}
               </select>
             )}
           </div>
